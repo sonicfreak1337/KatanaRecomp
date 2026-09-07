@@ -15,7 +15,7 @@ namespace katana::runtime {
 // The texture provenance record carries the decoded-payload identity used by
 // the cheap graphics diagnostics.  Keep this ABI version in lockstep with
 // that public record so older producers cannot silently omit the identity.
-inline constexpr std::uint32_t native_port_graphics_contract_version = 20u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 21u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 2u;
 // Type-2 translucent packets are admitted only when the adapter and renderer
 // agree on this small, address-agnostic contract.  The renderer owns the
@@ -61,6 +61,8 @@ enum class NativePortCameraAspectPolicy : std::uint8_t {
     OutputSurface,
     Explicit,
 };
+
+struct NativePortKeyboardControls;
 
 struct NativePortGraphicsConfig final {
     std::uint32_t contract_version = native_port_graphics_contract_version;
@@ -119,6 +121,9 @@ struct NativePortGraphicsConfig final {
     // Optional host-only aggregate telemetry owner. It must outlive the
     // device; the backend owner thread creates and retains its own writer.
     NativePortTelemetry* telemetry = nullptr;
+    // The same product-local switch as the platform input configuration.
+    // An empty pointer omits the optional P1 keyboard controls from the menu.
+    std::shared_ptr<NativePortKeyboardControls> keyboard_controls;
 };
 
 // Native game time and host presentation cadence are deliberately separate.

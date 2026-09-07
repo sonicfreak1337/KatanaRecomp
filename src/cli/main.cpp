@@ -469,6 +469,7 @@ void observe_port_export_progress(
             timing_boundaries.end(),
             phase) != timing_boundaries.end() ||
         phase.starts_with("latent-aot-discovery-fixpoint:") ||
+        phase.starts_with("latent-aot-primary-literal-transfers:") ||
         phase == "ir-lowering-final" ||
         phase.starts_with("game-project-validation:");
     if (!recorded_module_timing && timing_boundary)
@@ -1026,6 +1027,10 @@ int audit_callback_contracts_manifest(const std::filesystem::path& path,
                       << table.callback_displacement << " argument="
                       << static_cast<unsigned>(table.callback_argument)
                       << " width=" << static_cast<unsigned>(table.width)
+                      << " source-kind=" << static_cast<unsigned>(table.source_kind)
+                      << " table-argument=" << static_cast<unsigned>(table.table_argument)
+                      << " vector-address=0x" << std::hex << std::uppercase
+                      << table.vector_address << std::dec
                       << '\n';
         }
         return analysis.static_callback_contracts_materialized ? 0 : 2;
@@ -1093,7 +1098,10 @@ int audit_callback_contracts_manifest(const std::filesystem::path& path,
                   << ",\"callback_argument\":"
                   << static_cast<unsigned>(table.callback_argument)
                   << ",\"width\":"
-                  << static_cast<unsigned>(table.width) << '}';
+                  << static_cast<unsigned>(table.width)
+                  << ",\"source_kind\":" << static_cast<unsigned>(table.source_kind)
+                  << ",\"table_argument\":" << static_cast<unsigned>(table.table_argument)
+                  << ",\"vector_address\":" << table.vector_address << '}';
     }
     std::cout << "]}\n";
     return analysis.static_callback_contracts_materialized ? 0 : 2;
@@ -1154,8 +1162,15 @@ int audit_latent_aot_module_cli(
     const std::filesystem::path& path,
     const std::uint32_t source_address,
     std::vector<std::uint32_t> entry_offsets,
+    std::vector<std::uint32_t> external_code_targets,
     std::vector<katana::codegen::LatentAotExternalCallbackSink>
         external_callback_sinks,
+    std::vector<katana::codegen::LatentAotExternalCallbackFieldSink>
+        external_callback_field_sinks,
+    std::vector<katana::codegen::LatentAotExternalCallbackRecordTable>
+        external_callback_record_tables,
+    std::vector<katana::codegen::LatentAotExternalLiteralTransferCandidate>
+        external_literal_transfer_candidates,
     const std::optional<std::uint32_t> runtime_base,
     const bool sega_prs,
     const bool strict,
@@ -1194,12 +1209,41 @@ int audit_latent_aot_module_cli(
             merged_external_callback_sinks.push_back(sink);
         }
     }
-    std::vector<std::uint32_t> external_code_targets;
-    external_code_targets.reserve(merged_external_callback_sinks.size());
+    external_code_targets.reserve(external_code_targets.size() +
+                                  merged_external_callback_sinks.size());
     for (const auto& sink : merged_external_callback_sinks)
         external_code_targets.push_back(sink.function_address);
+    for (const auto& table : external_callback_record_tables) {
+        external_code_targets.push_back(table.function_address);
+        external_code_targets.push_back(table.callback_sink_address);
+    }
+    std::sort(external_code_targets.begin(), external_code_targets.end());
+    external_code_targets.erase(std::unique(external_code_targets.begin(), external_code_targets.end()), external_code_targets.end());
     options.external_code_targets = external_code_targets;
+    options.external_callback_record_tables = external_callback_record_tables;
     options.external_callback_sinks = merged_external_callback_sinks;
+    std::sort(external_callback_field_sinks.begin(), external_callback_field_sinks.end(),
+              [](const auto& a, const auto& b) {
+                  return std::tie(a.function_address, a.call_instruction_address,
+                                  a.load_instruction_address, a.displacement,
+                                  a.width, a.call, a.receiver_argument_mask) <
+                         std::tie(b.function_address, b.call_instruction_address,
+                                  b.load_instruction_address, b.displacement,
+                                  b.width, b.call, b.receiver_argument_mask);
+              });
+    external_callback_field_sinks.erase(
+        std::unique(external_callback_field_sinks.begin(), external_callback_field_sinks.end()),
+        external_callback_field_sinks.end());
+    options.external_callback_field_sinks = external_callback_field_sinks;
+    std::sort(external_literal_transfer_candidates.begin(), external_literal_transfer_candidates.end(),
+        [](const auto& a, const auto& b) {
+            return std::tie(a.call_instruction_address, a.literal_address, a.target_address, a.call) <
+                   std::tie(b.call_instruction_address, b.literal_address, b.target_address, b.call);
+        });
+    external_literal_transfer_candidates.erase(
+        std::unique(external_literal_transfer_candidates.begin(), external_literal_transfer_candidates.end()),
+        external_literal_transfer_candidates.end());
+    options.external_literal_transfer_candidates = external_literal_transfer_candidates;
     if (!json)
         options.progress =
             katana::ProgressReporter(observe_structured_progress);
@@ -1209,18 +1253,18 @@ int audit_latent_aot_module_cli(
                                         audit_latent_aot_sega_prs_module(
                                             bytes, source_address,
                                             entry_offsets, *runtime_base,
-                                            options)
+                                            options, strict)
                                   : katana::codegen::audit_latent_aot_module(
                                         bytes, source_address, entry_offsets,
-                                        *runtime_base, options))
+                                        *runtime_base, options, strict))
                            : (sega_prs
                                   ? katana::codegen::
                                         audit_latent_aot_sega_prs_module(
                                             bytes, source_address,
-                                            entry_offsets, options)
+                                            entry_offsets, options, strict)
                                   : katana::codegen::audit_latent_aot_module(
                                         bytes, source_address, entry_offsets,
-                                        options));
+                                        options, strict));
     if (!json) {
         std::cout << "Latent-AOT-Modulaudit: "
                   << (audit.admitted ? "admitted" : "rejected") << '\n'
@@ -1295,6 +1339,20 @@ int audit_latent_aot_module_cli(
                       : "false")
               << ",\"analyzed_function_offsets\":";
     write_offsets(audit.analyzed_function_offsets);
+    std::cout << ",\"record_callback_proposed_offsets\":";
+    write_offsets(audit.record_callback_proposed_offsets);
+    std::cout << ",\"registered_callback_receiver_candidate_offsets\":";
+    write_offsets(audit.registered_callback_receiver_candidate_offsets);
+    std::cout << ",\"callback_receiver_store_candidate_offsets\":";
+    write_offsets(audit.callback_receiver_store_candidate_offsets);
+    std::cout << ",\"discovery_before_cfg_filter_offsets\":";
+    write_offsets(audit.discovery_before_cfg_filter_offsets);
+    std::cout << ",\"discovery_after_cfg_filter_offsets\":";
+    write_offsets(audit.discovery_after_cfg_filter_offsets);
+    std::cout << ",\"discovery_after_nonroot_filter_offsets\":";
+    write_offsets(audit.discovery_after_nonroot_filter_offsets);
+    std::cout << ",\"referenced_block_entry_offsets\":";
+    write_offsets(audit.referenced_block_entry_offsets);
     std::cout << ",\"loader_tail_diagnostics\":[";
     for (std::size_t index = 0u;
          index < audit.loader_tail_diagnostics.size(); ++index) {
@@ -16095,6 +16153,9 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp latent-aot-module-audit <Modul.bin> "
               "--source-address <0xAdresse> --entry <0xOffset>... "
               "[--external-callback-sink <0xAdresse>:<0xMaske>]... "
+              "[--external-callback-field-sink <function>:<call>:<load>:<displacement>:<width>:<is-call>:<receiver-mask>]... "
+              "[--external-code-target <address>]... "
+              "[--external-sentinel-table <function>:<call>:<load>:<sink>:<stride>:<field>:<callback-arg>:<table-arg>]... "
               "[--runtime-base <0xAdresse>] [--sega-prs] [--strict] [--json]\n"
            << "  katana-recomp firmware-diagnose <bios|flash> <Datei> [--sha256 <Hash>] "
               "[--include-sensitive]\n"
@@ -16535,8 +16596,15 @@ int main(const int argc, char* argv[]) {
             std::optional<std::uint32_t> source_address;
             std::optional<std::uint32_t> runtime_base;
             std::vector<std::uint32_t> entry_offsets;
+            std::vector<std::uint32_t> external_code_targets;
             std::vector<katana::codegen::LatentAotExternalCallbackSink>
                 external_callback_sinks;
+            std::vector<katana::codegen::LatentAotExternalCallbackFieldSink>
+                external_callback_field_sinks;
+            std::vector<katana::codegen::LatentAotExternalCallbackRecordTable>
+                external_callback_record_tables;
+            std::vector<katana::codegen::LatentAotExternalLiteralTransferCandidate>
+                external_literal_transfer_candidates;
             bool sega_prs = false;
             bool strict = false;
             bool json = false;
@@ -16584,6 +16652,85 @@ int main(const int argc, char* argv[]) {
                         argv[index],
                         std::numeric_limits<std::uint32_t>::max(),
                         "Der Modulaudit-Entry"));
+                } else if (option == "--external-sentinel-table") {
+                    if (++index >= argc || external_callback_record_tables.size() >= 4096u)
+                        throw std::invalid_argument("Missing or excessive sentinel table contract.");
+                    const std::string value(argv[index]);
+                    std::array<std::uint32_t, 8u> fields{};
+                    std::size_t begin = 0u;
+                    for (std::size_t field = 0u; field < fields.size(); ++field) {
+                        const auto end = value.find(':', begin);
+                        if ((field + 1u == fields.size()) != (end == std::string::npos))
+                            throw std::invalid_argument("Sentinel table requires eight hexadecimal fields.");
+                        fields[field] = parse_hex_value(value.substr(begin, end == std::string::npos ? end : end - begin),
+                            std::numeric_limits<std::uint32_t>::max(), "Sentinel table");
+                        if (end != std::string::npos) begin = end + 1u;
+                    }
+                    if (fields[0] == 0u || fields[1] < fields[0] || fields[2] < fields[0] || fields[3] == 0u ||
+                        ((fields[0] | fields[1] | fields[2] | fields[3]) & 1u) != 0u ||
+                        fields[4] < 4u || fields[4] > 256u || (fields[4] & 3u) != 0u ||
+                        fields[5] > fields[4] - 4u || (fields[5] & 3u) != 0u || fields[6] >= 4u || fields[7] >= 4u)
+                        throw std::invalid_argument("Invalid sentinel table contract.");
+                    external_callback_record_tables.push_back({fields[0], fields[1], fields[2], fields[3],
+                        0, fields[4], static_cast<std::int32_t>(fields[5]), static_cast<std::uint8_t>(fields[6]), 4u,
+                        katana::analysis::CallbackRecordTableSource::DirectSentinelArgument, static_cast<std::uint8_t>(fields[7])});
+                } else if (option == "--external-literal-transfer") {
+                    if (++index >= argc || external_literal_transfer_candidates.size() >=
+                            katana::codegen::maximum_latent_aot_external_literal_transfer_candidates)
+                        throw std::invalid_argument("Missing or excessive external literal transfer.");
+                    const std::string value(argv[index]);
+                    std::array<std::uint32_t, 4u> fields{};
+                    std::size_t begin = 0u;
+                    for (std::size_t field = 0u; field < fields.size(); ++field) {
+                        const auto end = value.find(':', begin);
+                        if ((field + 1u == fields.size()) != (end == std::string::npos))
+                            throw std::invalid_argument("Literal transfer requires callsite:literal:target:call (hex).");
+                        fields[field] = parse_hex_value(
+                            value.substr(begin, end == std::string::npos ? end : end - begin),
+                            std::numeric_limits<std::uint32_t>::max(), "External literal transfer");
+                        if (end != std::string::npos) begin = end + 1u;
+                    }
+                    if (((fields[0] | fields[2]) & 1u) != 0u || (fields[1] & 3u) != 0u ||
+                        fields[0] >> 29u != 4u || fields[1] >> 29u != 4u ||
+                        fields[2] >> 29u != 4u || fields[3] > 1u)
+                        throw std::invalid_argument("Invalid aligned P1 literal-transfer contract.");
+                    // Audit-only source witness, never a project/root manifest.
+                    external_literal_transfer_candidates.push_back(
+                        {fields[0], fields[1], fields[2], fields[3] != 0u});
+                } else if (option == "--external-code-target") {
+                    if (++index >= argc || external_code_targets.size() >= 65536u)
+                        throw std::invalid_argument("Missing or excessive external code target.");
+                    const auto address = parse_hex_value(
+                        argv[index], std::numeric_limits<std::uint32_t>::max(),
+                        "External code target");
+                    if ((address & 1u) != 0u || (address >> 29u) != 4u)
+                        throw std::invalid_argument("External code target must be an aligned canonical P1 address.");
+                    // Audit-only input: model a known resident entry without
+                    // inventing a callback argument contract for that entry.
+                    external_code_targets.push_back(address);
+                } else if (option == "--external-callback-field-sink") {
+                    if (++index >= argc || external_callback_field_sinks.size() >= 4096u)
+                        throw std::invalid_argument("Missing or excessive callback field sink.");
+                    const std::string value(argv[index]);
+                    std::array<std::uint32_t, 7u> fields{};
+                    std::size_t begin = 0u;
+                    for (std::size_t field = 0u; field < fields.size(); ++field) {
+                        const auto end = value.find(':', begin);
+                        if ((field + 1u == fields.size()) != (end == std::string::npos))
+                            throw std::invalid_argument("Callback field sink requires exactly seven hexadecimal fields.");
+                        fields[field] = parse_hex_value(
+                            value.substr(begin, end == std::string::npos ? end : end - begin),
+                            std::numeric_limits<std::uint32_t>::max(), "Callback field sink");
+                        if (end != std::string::npos) begin = end + 1u;
+                    }
+                    if (fields[0] == 0u || fields[1] == 0u || fields[2] == 0u ||
+                        ((fields[0] | fields[1] | fields[2]) & 1u) != 0u ||
+                        fields[3] > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) ||
+                        fields[4] != 4u || fields[5] > 1u || fields[6] > 0xFu)
+                        throw std::invalid_argument("Invalid callback field sink.");
+                    external_callback_field_sinks.push_back({fields[0], fields[1], fields[2],
+                        static_cast<std::int32_t>(fields[3]), static_cast<std::uint8_t>(fields[4]),
+                        fields[5] != 0u, static_cast<std::uint8_t>(fields[6])});
                 } else if (option == "--external-callback-sink") {
                     if (++index >= argc)
                         throw std::invalid_argument(
@@ -16623,7 +16770,11 @@ int main(const int argc, char* argv[]) {
                 std::filesystem::path(argv[2]),
                 *source_address,
                 std::move(entry_offsets),
+                std::move(external_code_targets),
                 std::move(external_callback_sinks),
+                std::move(external_callback_field_sinks),
+                std::move(external_callback_record_tables),
+                std::move(external_literal_transfer_candidates),
                 runtime_base,
                 sega_prs,
                 strict,

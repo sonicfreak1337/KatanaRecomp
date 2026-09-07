@@ -769,6 +769,7 @@ class NativePortAudioEngine::Core final {
     }
 
     ~Core() {
+        invalidate_prepared_restore();
         for (auto& slot : slots_) {
             if (slot.voice) close_decoder(*slot.voice);
         }
@@ -785,6 +786,7 @@ class NativePortAudioEngine::Core final {
         std::vector<std::byte> content,
         const NativePortAudioVoiceConfig& config) {
         require_owner_thread();
+        invalidate_prepared_restore();
         validate_voice_config(config);
 
         auto voice = std::make_unique<Voice>();
@@ -816,6 +818,7 @@ class NativePortAudioEngine::Core final {
     [[nodiscard]] NativePortAudioVoiceHandle create_pcm_feed(
         const NativePortAudioVoiceConfig& config) {
         require_owner_thread();
+        invalidate_prepared_restore();
         validate_voice_config(config);
         if (config.loop || config.start_frame != 0u ||
             config.loop_start_frame != 0u || config.loop_end_frame != 0u)
@@ -835,6 +838,7 @@ class NativePortAudioEngine::Core final {
         const NativePortAudioVoiceHandle handle,
         const std::span<const std::int16_t> samples) {
         require_owner_thread();
+        invalidate_prepared_restore();
         auto& voice = require_voice(handle);
         if (voice.source != NativePortAudioVoiceSource::PcmFeed)
             fail_audio_engine(NativePortAudioEngineFailure::InvalidVoiceConfig,
@@ -866,6 +870,7 @@ class NativePortAudioEngine::Core final {
 
     void finish_pcm_feed(const NativePortAudioVoiceHandle handle) {
         require_owner_thread();
+        invalidate_prepared_restore();
         auto& voice = require_voice(handle);
         if (voice.source != NativePortAudioVoiceSource::PcmFeed)
             fail_audio_engine(NativePortAudioEngineFailure::InvalidVoiceConfig,
@@ -904,6 +909,7 @@ class NativePortAudioEngine::Core final {
 
     void play(const NativePortAudioVoiceHandle handle) {
         require_owner_thread();
+        invalidate_prepared_restore();
         auto& voice = require_voice(handle);
         if (voice.state == NativePortAudioVoiceState::Failed)
             fail_audio_engine(voice.failure,
@@ -930,6 +936,7 @@ class NativePortAudioEngine::Core final {
 
     void pause(const NativePortAudioVoiceHandle handle) {
         require_owner_thread();
+        invalidate_prepared_restore();
         auto& voice = require_voice(handle);
         if (voice.state == NativePortAudioVoiceState::Playing)
             voice.state = NativePortAudioVoiceState::Paused;
@@ -937,6 +944,7 @@ class NativePortAudioEngine::Core final {
 
     void resume(const NativePortAudioVoiceHandle handle) {
         require_owner_thread();
+        invalidate_prepared_restore();
         auto& voice = require_voice(handle);
         if (voice.state == NativePortAudioVoiceState::Paused)
             voice.state = NativePortAudioVoiceState::Playing;
@@ -944,6 +952,7 @@ class NativePortAudioEngine::Core final {
 
     void stop(const NativePortAudioVoiceHandle handle) {
         require_owner_thread();
+        invalidate_prepared_restore();
         auto& voice = require_voice(handle);
         close_decoder(voice);
         voice.pcm.clear();
@@ -954,6 +963,7 @@ class NativePortAudioEngine::Core final {
 
     void release(const NativePortAudioVoiceHandle handle) {
         require_owner_thread();
+        invalidate_prepared_restore();
         auto& slot = require_slot(handle);
         close_decoder(*slot.voice);
         slot.voice.reset();
@@ -966,6 +976,7 @@ class NativePortAudioEngine::Core final {
                       const float gain,
                       const float pan) {
         require_owner_thread();
+        invalidate_prepared_restore();
         if (!valid_gain_pan(gain, pan))
             fail_audio_engine(
                 NativePortAudioEngineFailure::InvalidVoiceConfig,
@@ -979,6 +990,7 @@ class NativePortAudioEngine::Core final {
     void set_output_paused(const bool paused) {
         require_owner_thread();
         if (output_paused_ == paused) return;
+        invalidate_prepared_restore();
         try {
             if (paused)
                 output_->pause();
@@ -994,6 +1006,7 @@ class NativePortAudioEngine::Core final {
 
     void stop_all() {
         require_owner_thread();
+        invalidate_prepared_restore();
         for (auto& slot : slots_) {
             if (!slot.voice) continue;
             close_decoder(*slot.voice);
@@ -1008,6 +1021,7 @@ class NativePortAudioEngine::Core final {
               void* const sound_bank_target,
               const WorkerMixSource sound_bank_mix_source) {
         require_owner_thread();
+        invalidate_prepared_restore();
         try {
             output_->poll();
             if (refresh_playback_position) {
@@ -1764,8 +1778,9 @@ class NativePortAudioEngine::Core final {
 
 
   public:
-    DevelopmentAudioState capture_development_state() const {
+    DevelopmentAudioState capture_development_state() {
         require_owner_thread();
+        invalidate_prepared_restore();
         require_development_audio(output_paused_);
         DevelopmentAudioState s;
         s.provider = codec_provider_.provider_name;
@@ -1813,8 +1828,8 @@ class NativePortAudioEngine::Core final {
         return s;
     }
 
-    // All decoder reconstruction and allocations are staged. Validation
-    // destroys only these temporary decoders, never a live voice/endpoint.
+    // Stage decoder reconstruction before touching live voices. A successful
+    // validation can retain this one-use stage for an identical paused restore.
     struct DevelopmentStage {
         Core* owner;
         std::vector<Slot> slots;
@@ -1824,6 +1839,24 @@ class NativePortAudioEngine::Core final {
                 if (slot.voice) owner->close_decoder(*slot.voice);
         }
     };
+
+    struct PreparedDevelopmentRestore {
+        std::vector<std::uint8_t> wire_bytes;
+        std::unique_ptr<DevelopmentStage> stage;
+    };
+
+    void invalidate_prepared_restore() noexcept { prepared_restore_.reset(); }
+
+    void validate_development_state(const DevelopmentAudioState& state,
+                                    std::vector<std::uint8_t> wire_bytes) {
+        require_owner_thread();
+        invalidate_prepared_restore();
+        auto stage = stage_development_state(state);
+        auto ready = std::make_unique<PreparedDevelopmentRestore>();
+        ready->wire_bytes = std::move(wire_bytes);
+        ready->stage = std::move(stage);
+        prepared_restore_ = std::move(ready);
+    }
 
     std::unique_ptr<DevelopmentStage> stage_development_state(
         const DevelopmentAudioState& s) {
@@ -1944,8 +1977,28 @@ class NativePortAudioEngine::Core final {
         return staged;
     }
 
-    void restore_development_state(const DevelopmentAudioState& s) {
-        auto staged = stage_development_state(s);
+    void restore_development_state(const DevelopmentAudioState& s,
+                                   const std::span<const std::uint8_t> wire_bytes) {
+        require_owner_thread();
+        // Config/provider are immutable for this Core. Every mutating Core
+        // operation invalidates the stage, including paused endpoint polling.
+        // The producer still verifies every content binding on each restore.
+        const bool matches = prepared_restore_ && output_paused_ && s.paused &&
+            s.config == development_audio_config(config_) &&
+            s.provider == codec_provider_.provider_name &&
+            prepared_restore_->wire_bytes.size() == wire_bytes.size() &&
+            std::equal(wire_bytes.begin(), wire_bytes.end(),
+                       prepared_restore_->wire_bytes.begin());
+        auto prepared = std::move(prepared_restore_);
+        std::unique_ptr<DevelopmentStage> staged;
+        if (matches) {
+            staged = std::move(prepared->stage);
+        } else {
+            prepared.reset();
+            staged = stage_development_state(s);
+        }
+        // Every attempt consumes the stage. Failures before the swaps below
+        // close candidate decoders through RAII and preserve logical voices.
         auto next_output = std::make_unique<NativePortAudioStream>(
             NativePortAudioConfig{config_.output_format,
                                   config_.maximum_output_queue_frames,
@@ -1994,6 +2047,7 @@ class NativePortAudioEngine::Core final {
     std::uint32_t submitted_peak_sample_ = 0u;
     std::uint32_t pending_peak_sample_ = 0u;
     bool output_paused_ = false;
+    std::unique_ptr<PreparedDevelopmentRestore> prepared_restore_;
 };
 
 class NativePortAudioEngine::Impl final {
@@ -2237,16 +2291,19 @@ class NativePortAudioEngine::Impl final {
                         static_cast<std::uint32_t>(index), slot.generation});
             }
         }
-        development_input_ = std::move(saved);
         try {
+            development_input_wire_.assign(bytes.begin(), bytes.end());
+            development_input_ = std::move(saved);
             dispatch_development_state(restore
                 ? AudioEngineOpcode::RestoreDevelopmentState
                 : AudioEngineOpcode::ValidateDevelopmentState);
         } catch (...) {
             development_input_.reset();
+            development_input_wire_.clear();
             throw;
         }
         development_input_.reset();
+        development_input_wire_.clear();
         if (restore) frame_cursor_.reset_source_epoch();
         return inventory;
     }
@@ -2777,9 +2834,10 @@ class NativePortAudioEngine::Impl final {
             if (!payload.empty() || !development_input_)
                 return invalid_payload(result);
             if (opcode == AudioEngineOpcode::RestoreDevelopmentState)
-                core_->restore_development_state(*development_input_);
+                core_->restore_development_state(*development_input_, development_input_wire_);
             else
-                static_cast<void>(core_->stage_development_state(*development_input_));
+                core_->validate_development_state(*development_input_,
+                                                  std::move(development_input_wire_));
             return;
         case AudioEngineOpcode::VoiceSnapshot: {
             AudioHandleCommand command;
@@ -2880,6 +2938,7 @@ class NativePortAudioEngine::Impl final {
     // only that worker command reads it. Ack fences output ownership back.
     // No pointers are placed in a command packet or serialized state.
     mutable std::optional<DevelopmentAudioState> development_input_;
+    mutable std::vector<std::uint8_t> development_input_wire_;
     mutable std::vector<std::uint8_t> development_output_;
     mutable NativePortAudioCommandStamp bound_stamp_{};
     mutable AudioEngineFrameCursor frame_cursor_;

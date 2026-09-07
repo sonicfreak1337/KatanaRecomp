@@ -1,5 +1,7 @@
 #pragma once
 
+#include "katana/analysis/callback_table_source.hpp"
+
 #include "katana/analysis/analysis_index.hpp"
 #include "katana/analysis/analysis_overrides.hpp"
 #include "katana/analysis/basic_blocks.hpp"
@@ -175,10 +177,14 @@ struct StaticCallbackFieldSinkContract final {
 };
 
 // A primary-image consumer may obtain one callback from a record array whose
-// base is stored in a header.  This is deliberately a shape contract rather
-// than a target list: a loaded module must independently prove an
-// identity-bound header pointer and a bounded, terminating record table
-// before any local callback entry becomes guarded AOT inventory.
+// base is stored in a header, an argument, or one concrete runtime vector.
+// The StaticVectorAddress form is positive, identity-bound RuntimeOnly
+// inventory only; it never proves that a record or selector domain is
+// complete. Its record bytes may be a committed file-source snapshot without
+// an immutable-data proof; no consumer may turn this inventory into constant
+// memory or a complete target set. Other forms remain shape contracts and
+// require a loaded module to prove a bounded, terminating table before any local callback entry becomes
+// guarded AOT inventory.
 struct StaticCallbackRecordTableContract final {
     std::uint32_t function_address = 0u;
     std::uint32_t call_instruction_address = 0u;
@@ -190,6 +196,16 @@ struct StaticCallbackRecordTableContract final {
     // Zero-based ABI argument index: r4..r7.
     std::uint8_t callback_argument = 0u;
     std::uint8_t width = 0u;
+
+    CallbackRecordTableSource source_kind = CallbackRecordTableSource::HeaderCount;
+    // DirectSentinelArgument: incoming r4..r7 supplies the first record;
+    // iteration stops before consuming a zero callback field. HeaderCount
+    // retains the existing header/count contract and requires this to be zero.
+    // StaticVectorAddress also requires zero and binds vector_address instead.
+    std::uint8_t table_argument = 0u;
+    // Canonical P1 runtime address for StaticVectorAddress; zero for every
+    // other source kind.
+    std::uint32_t vector_address = 0u;
 
     bool operator==(
         const StaticCallbackRecordTableContract&) const = default;

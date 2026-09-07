@@ -1,4 +1,5 @@
 #include "katana/runtime/native_port_graphics.hpp"
+#include "katana/runtime/native_port_platform.hpp"
 #include "katana/runtime/native_port_telemetry.hpp"
 #include "native_port_graphics_command_stream.hpp"
 
@@ -92,6 +93,7 @@ constexpr UINT runtime_menu_save_state = 0x7103u;
 constexpr UINT runtime_menu_load_state = 0x7104u;
 constexpr UINT runtime_menu_quick_save_state = 0x7105u;
 constexpr UINT runtime_menu_quick_load_state = 0x7106u;
+constexpr UINT runtime_menu_keyboard_controls = 0x7107u;
 constexpr UINT runtime_menu_rate_first = 0x7110u;
 constexpr UINT runtime_menu_rate_last =
     runtime_menu_rate_first +
@@ -3266,6 +3268,13 @@ class NativePortGraphicsBackend final {
         if (self == nullptr) return DefWindowProcW(window, message, word, data);
         switch (message) {
         case WM_KEYDOWN:
+            if (word == VK_F6) {
+                if ((static_cast<std::uintptr_t>(data) &
+                     (std::uintptr_t{1u} << 30u)) == 0u)
+                    static_cast<void>(self->handle_runtime_menu_command(
+                        runtime_menu_keyboard_controls));
+                return 0;
+            }
             if (word == VK_F5 || word == VK_F9) {
                 if ((static_cast<std::uintptr_t>(data) &
                      (std::uintptr_t{1u} << 30u)) == 0u)
@@ -3306,6 +3315,15 @@ class NativePortGraphicsBackend final {
     [[nodiscard]] bool handle_runtime_menu_command(
         const UINT command) noexcept {
         if (runtime_options_ == nullptr) return false;
+        if (command == runtime_menu_keyboard_controls) {
+            if (config_.keyboard_controls == nullptr) return true;
+            const auto enabled = !config_.keyboard_controls->enabled.load(
+                std::memory_order_acquire);
+            config_.keyboard_controls->enabled.store(
+                enabled, std::memory_order_release);
+            update_runtime_options_menu(true);
+            return true;
+        }
         if (command == runtime_menu_quick_save_state ||
             command == runtime_menu_quick_load_state) {
             quick_development_state(
@@ -3538,6 +3556,10 @@ class NativePortGraphicsBackend final {
             fail_menu("runtime-menu-performance-overlay");
         if (AppendMenuW(options_menu, MF_SEPARATOR, 0u, nullptr) == FALSE)
             fail_menu("runtime-menu-separator");
+        if (config_.keyboard_controls != nullptr &&
+            AppendMenuW(options_menu, MF_STRING, runtime_menu_keyboard_controls,
+                        L"P1 Tastatur: Pfeile, Leertaste=A, B=B\tF6") == FALSE)
+            fail_menu("runtime-menu-keyboard-controls");
         if (AppendMenuW(options_menu,
                         MF_STRING,
                         runtime_menu_save_state,
@@ -3669,6 +3691,13 @@ class NativePortGraphicsBackend final {
             options_menu_,
             runtime_menu_performance_overlay,
             MF_BYCOMMAND | (overlay_enabled ? MF_CHECKED : MF_UNCHECKED)));
+        if (config_.keyboard_controls != nullptr) {
+            const auto enabled = config_.keyboard_controls->enabled.load(
+                std::memory_order_acquire);
+            static_cast<void>(CheckMenuItem(
+                options_menu_, runtime_menu_keyboard_controls,
+                MF_BYCOMMAND | (enabled ? MF_CHECKED : MF_UNCHECKED)));
+        }
         const auto state_request_pending =
             runtime_options_->state_request_publication.load(
                 std::memory_order_acquire) !=
@@ -6830,7 +6859,13 @@ class NativePortGraphicsDevice::Impl final {
         if (!development_probe_initialized_) {
             development_probe_initialized_ = true;
             const auto* mode = std::getenv("KATANA_NATIVE_DEVELOPMENT_STATE_PROBE");
-            if (mode != nullptr && *mode != 0) {
+            const auto* initial_state = std::getenv("KATANA_NATIVE_INPUT_START_STATE");
+            if (initial_state != nullptr && *initial_state != 0) {
+                if (mode != nullptr && *mode != 0)
+                    fail_facade("development-state-probe-conflicting-start");
+                development_initial_state_path_ = initial_state;
+                development_probe_count_ = 1u;
+            } else if (mode != nullptr && *mode != 0) {
                 if (std::strcmp(mode, "roundtrip") == 0) development_probe_count_ = 3u;
                 else if (std::strcmp(mode, "load") == 0) development_probe_count_ = 1u;
                 else fail_facade("development-state-probe-mode");
@@ -6842,7 +6877,8 @@ class NativePortGraphicsDevice::Impl final {
             return std::nullopt;
         const auto frames = runtime_options_.simulation_frames.load(
             std::memory_order_relaxed);
-        if (frames < 600u + 180u * development_probe_next_)
+        if (frames < (development_initial_state_path_.empty()
+                          ? 600u + 180u * development_probe_next_ : 1u))
             return std::nullopt;
         const auto operation = development_probe_count_ == 3u && development_probe_next_ == 0u
             ? NativePortDevelopmentStateOperation::Save
@@ -6853,7 +6889,9 @@ class NativePortGraphicsDevice::Impl final {
             std::filesystem::create_directories(directory, error);
             if (error) fail_facade("development-state-probe-create-directory");
         }
-        const auto utf8 = (directory / "quicksave.kstate").u8string();
+        const auto utf8 = (development_initial_state_path_.empty()
+            ? directory / "quicksave.kstate"
+            : std::filesystem::u8path(development_initial_state_path_)).u8string();
         NativePortDevelopmentStateRequest request;
         request.operation = operation;
         request.path.assign(reinterpret_cast<const char*>(utf8.data()), utf8.size());
@@ -8233,6 +8271,7 @@ class NativePortGraphicsDevice::Impl final {
     NativePortGraphicsExecutionMode active_mode_ =
         NativePortGraphicsExecutionMode::Parallel;
     bool development_probe_initialized_ = false;
+    std::string development_initial_state_path_;
     std::uint64_t development_probe_count_ = 0u;
     std::uint64_t development_probe_next_ = 0u;
     NativePortRuntimeOptionsBridge runtime_options_;

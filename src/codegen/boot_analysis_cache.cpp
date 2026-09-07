@@ -1050,6 +1050,9 @@ void write_static_callback_record_table(
     output.u32(static_cast<std::uint32_t>(value.callback_displacement));
     output.u8(value.callback_argument);
     output.u8(value.width);
+    output.u8(static_cast<std::uint8_t>(value.source_kind));
+    output.u8(value.table_argument);
+    output.u32(value.vector_address);
 }
 
 [[nodiscard]] katana::analysis::StaticCallbackRecordTableContract
@@ -1066,6 +1069,13 @@ read_static_callback_record_table(Reader& input) {
         static_cast<std::int32_t>(input.u32());
     value.callback_argument = input.u8();
     value.width = input.u8();
+    value.source_kind = static_cast<katana::analysis::CallbackRecordTableSource>(input.u8());
+    value.table_argument = input.u8();
+    value.vector_address = input.u32();
+    if (!katana::analysis::valid_callback_table_source(
+            value.source_kind, value.table_argument,
+            value.header_table_pointer_displacement,
+            value.vector_address)) throw CodecError();
     return value;
 }
 

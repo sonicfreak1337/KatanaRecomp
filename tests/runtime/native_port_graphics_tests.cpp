@@ -846,7 +846,7 @@ int main(const int argc, char** const argv) {
     return EXIT_SUCCESS;
 #else
     using namespace katana::runtime;
-    static_assert(native_port_graphics_contract_version == 20u);
+    static_assert(native_port_graphics_contract_version == 21u);
     static_assert(native_port_frame_pacing_contract_version == 2u);
     static_assert(native_port_type2_autosort_contract_version == 3u);
 

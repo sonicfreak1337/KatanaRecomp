@@ -3,6 +3,7 @@
 #include "katana/runtime/native_port.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -14,7 +15,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_platform_contract_version = 9u;
+inline constexpr std::uint32_t native_port_platform_contract_version = 11u;
 inline constexpr std::size_t native_port_gamepad_count = 4u;
 inline constexpr std::uint32_t native_port_input_recording_version = 2u;
 // Replay compatibility is deliberately independent from the wider platform
@@ -27,6 +28,12 @@ inline constexpr std::size_t native_port_input_recording_maximum_frames =
 // Public bound for NativePortSaveKey::slot_id. Higher-level semantic save
 // providers must be able to validate their composed keys before host I/O.
 inline constexpr std::size_t native_port_save_slot_id_maximum_bytes = 64u;
+
+// One product-local switch shared by the window and input owners. It adds
+// keyboard gameplay input to P1 without changing physical controller identity.
+struct NativePortKeyboardControls final {
+    std::atomic<bool> enabled{false};
+};
 
 struct NativePortPlatformConfig final {
     std::uint32_t contract_version = native_port_platform_contract_version;
@@ -44,6 +51,9 @@ struct NativePortPlatformConfig final {
     // for ordinary launches. Replay itself always remains explicit.
     std::filesystem::path input_record_path;
     std::filesystem::path input_replay_path;
+    // A checkpoint-bound trace stays neutral and consumes no records until
+    // the title has validated and restored these exact snapshot bytes.
+    std::filesystem::path input_initial_state_path;
     std::string_view input_identity;
     std::size_t maximum_input_record_frames =
         native_port_input_recording_maximum_frames;
@@ -52,6 +62,7 @@ struct NativePortPlatformConfig final {
     // strict default so an incomplete requested capture cannot look whole.
     bool stop_input_recording_at_capacity = false;
     bool require_gamepad_backend = true;
+    std::shared_ptr<NativePortKeyboardControls> keyboard_controls;
 };
 
 enum class NativePortPlatformFailure : std::uint8_t {
@@ -297,6 +308,8 @@ class NativePortPlatformServices final {
     open_content_range(const NativePortContentRangeBinding& binding);
 
     [[nodiscard]] NativePortInputSnapshot poll_gamepads();
+    void validate_input_initial_state(std::span<const std::byte> bytes);
+    void start_input_after_initial_state_load();
     // Compacts an opt-in input journal at a known clean shutdown boundary.
     // Recording itself is a preallocated mapped journal, so the committed
     // prefix remains replayable even when a hard process failure bypasses C++

@@ -9,6 +9,59 @@
 
 namespace katana::runtime::detail {
 
+struct NativeKeyboardGamepadState final {
+    NativePortGamepadState state;
+    bool left_stick_active = false;
+};
+
+[[nodiscard]] constexpr NativeKeyboardGamepadState keyboard_direction_state(
+    const bool enabled, const bool left, const bool right,
+    const bool up, const bool down, const bool space, const bool b) noexcept {
+    NativeKeyboardGamepadState result;
+    result.state.connected = true;
+    const auto add = [&](const bool pressed,
+                         const NativePortGamepadButton button) {
+        if (pressed)
+            result.state.buttons |= native_port_gamepad_button_mask(button);
+    };
+    if (!enabled) {
+        add(left, NativePortGamepadButton::DpadLeft);
+        add(right, NativePortGamepadButton::DpadRight);
+        add(up, NativePortGamepadButton::DpadUp);
+        add(down, NativePortGamepadButton::DpadDown);
+        return result;
+    }
+    const auto x = static_cast<int>(right) - static_cast<int>(left);
+    const auto y = static_cast<int>(up) - static_cast<int>(down);
+    const auto scale = x != 0 && y != 0 ? 23'170 : 32'767;
+    result.left_stick_active = left || right || up || down;
+    result.state.left_stick_x_raw = static_cast<std::int16_t>(x * scale);
+    result.state.left_stick_y_raw = static_cast<std::int16_t>(y * scale);
+    result.state.left_stick_x =
+        static_cast<float>(result.state.left_stick_x_raw) / 32'767.0f;
+    result.state.left_stick_y =
+        static_cast<float>(result.state.left_stick_y_raw) / 32'767.0f;
+    add(space, NativePortGamepadButton::A);
+    add(b, NativePortGamepadButton::B);
+    return result;
+}
+
+constexpr void merge_keyboard_gamepad(
+    NativePortGamepadState& destination,
+    const NativeKeyboardGamepadState& keyboard) noexcept {
+    destination.connected = destination.connected || keyboard.state.connected;
+    destination.buttons |= keyboard.state.buttons;
+    // A released/focus-lost keyboard leaves the physical stick untouched.
+    // While arrows are held they supply one complete, normalized vector;
+    // opposing arrows cancel rather than exposing a stale physical axis.
+    if (keyboard.left_stick_active) {
+        destination.left_stick_x_raw = keyboard.state.left_stick_x_raw;
+        destination.left_stick_y_raw = keyboard.state.left_stick_y_raw;
+        destination.left_stick_x = keyboard.state.left_stick_x;
+        destination.left_stick_y = keyboard.state.left_stick_y;
+    }
+}
+
 inline constexpr std::uint64_t xinput_device_domain =
     0x0100000000000000ull;
 inline constexpr std::uint64_t joystick_device_domain =

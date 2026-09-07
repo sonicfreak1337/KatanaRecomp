@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -889,25 +890,18 @@ void add_button(std::uint32_t& buttons,
     return process_id == GetCurrentProcessId();
 }
 
-[[nodiscard]] NativePortGamepadState keyboard_gamepad_state() noexcept {
-    NativePortGamepadState result;
-    result.connected = true;
-    if (!foreground_process_is_current()) return result;
+[[nodiscard]] detail::NativeKeyboardGamepadState keyboard_gamepad_state(
+    const bool gameplay_enabled) noexcept {
+    detail::NativeKeyboardGamepadState keyboard;
+    keyboard.state.connected = true;
+    if (!foreground_process_is_current()) return keyboard;
     const auto pressed = [](const int virtual_key) noexcept {
         return (GetAsyncKeyState(virtual_key) & 0x8000) != 0;
     };
-    add_button(result.buttons,
-               pressed(VK_UP),
-               NativePortGamepadButton::DpadUp);
-    add_button(result.buttons,
-               pressed(VK_DOWN),
-               NativePortGamepadButton::DpadDown);
-    add_button(result.buttons,
-               pressed(VK_LEFT),
-               NativePortGamepadButton::DpadLeft);
-    add_button(result.buttons,
-               pressed(VK_RIGHT),
-               NativePortGamepadButton::DpadRight);
+    keyboard = detail::keyboard_direction_state(
+        gameplay_enabled, pressed(VK_LEFT), pressed(VK_RIGHT),
+        pressed(VK_UP), pressed(VK_DOWN), pressed(VK_SPACE), pressed('B'));
+    auto& result = keyboard.state;
     add_button(result.buttons,
                pressed(VK_RETURN),
                NativePortGamepadButton::Menu);
@@ -927,13 +921,7 @@ void add_button(std::uint32_t& buttons,
     add_button(result.buttons,
                pressed('W'),
                NativePortGamepadButton::RightShoulder);
-    return result;
-}
-
-void merge_keyboard_gamepad(NativePortGamepadState& destination,
-                            const NativePortGamepadState& keyboard) noexcept {
-    destination.connected = destination.connected || keyboard.connected;
-    destination.buttons |= keyboard.buttons;
+    return keyboard;
 }
 
 void add_pov_buttons(std::uint32_t& buttons, const DWORD pov) noexcept {
@@ -2045,7 +2033,8 @@ class NativePortPlatformServices::Impl final {
           maximum_content_file_bytes_(config.maximum_content_file_bytes),
           maximum_save_payload_bytes_(config.maximum_save_payload_bytes),
           owner_thread_(std::this_thread::get_id()),
-          telemetry_(std::make_shared<PlatformTelemetry>()) {
+          telemetry_(std::make_shared<PlatformTelemetry>()),
+          keyboard_controls_(config.keyboard_controls) {
         validate_config(config);
         require_safe_existing_components(
             config.content_root,
@@ -2122,10 +2111,41 @@ class NativePortPlatformServices::Impl final {
                           ERROR_INVALID_PARAMETER,
                           "input-record-replay-exclusive");
         if (!record_path.empty() || !replay_path.empty()) {
-            const auto validated_identity = copy_validated_identifier(
+            auto validated_identity = copy_validated_identifier(
                 config.input_identity,
                 maximum_platform_identifier_bytes,
                 "input-identity");
+            if (!config.input_initial_state_path.empty()) {
+                std::ifstream state(config.input_initial_state_path, std::ios::binary);
+                if (!state)
+                    fail_platform(NativePortPlatformFailure::InputBackend,
+                                  ERROR_FILE_NOT_FOUND, "input-initial-state-open");
+                Sha256 state_hash;
+                std::array<char, 65'536u> chunk{};
+                std::uint64_t size = 0u;
+                while (state.read(chunk.data(), chunk.size()) || state.gcount() != 0) {
+                    const auto count = static_cast<std::size_t>(state.gcount());
+                    size += count;
+                    if (size > 512ull * 1024u * 1024u)
+                        fail_platform(NativePortPlatformFailure::ResourceLimit,
+                                      ERROR_BUFFER_OVERFLOW, "input-initial-state-size");
+                    state_hash.update(chunk.data(), count);
+                }
+                if (!state.eof() || size == 0u)
+                    fail_platform(NativePortPlatformFailure::InputBackend,
+                                  ERROR_READ_FAULT, "input-initial-state-read");
+                input_initial_state_digest_ = state_hash.finish();
+                Sha256 identity_hash;
+                identity_hash.update_scalar<std::uint64_t>(validated_identity.size());
+                identity_hash.update(validated_identity.data(), validated_identity.size());
+                identity_hash.update(input_initial_state_digest_.data(), input_initial_state_digest_.size());
+                validated_identity = "katana-native-input-state-v1-" +
+                    digest_identity(identity_hash.finish());
+                input_initial_state_configured_ = true;
+                input_initial_state_pending_ = true;
+                std::fprintf(stderr, "KATANA_NATIVE_INPUT_START_STATE status=waiting state=%s trace_identity=%s\n",
+                    digest_identity(input_initial_state_digest_).c_str(), validated_identity.c_str());
+            }
             if (!replay_path.empty()) {
                 input_trace_ = NativePortInputTrace::load(
                     replay_path,
@@ -2143,6 +2163,9 @@ class NativePortPlatformServices::Impl final {
             }
         }
 
+        if (!config.input_initial_state_path.empty() && input_trace_ == nullptr)
+            fail_platform(NativePortPlatformFailure::InvalidConfig,
+                          ERROR_INVALID_PARAMETER, "input-initial-state-without-trace");
         xinput_ = load_xinput();
         // A loaded XInput API or at least one configured WinMM driver slot is
         // independent backend evidence. Merely linking winmm.lib does not
@@ -2318,6 +2341,12 @@ class NativePortPlatformServices::Impl final {
 
     [[nodiscard]] NativePortInputSnapshot poll_gamepads() {
         require_owner_thread();
+        if (input_initial_state_pending_) {
+            saturating_increment(telemetry_->snapshot.input_polls);
+            NativePortInputSnapshot neutral;
+            neutral.gamepads.front().connected = true;
+            return neutral;
+        }
         if (input_replay_mode_) {
             input_snapshot_ = input_trace_->next();
             saturating_increment(telemetry_->snapshot.input_polls);
@@ -2608,12 +2637,14 @@ class NativePortPlatformServices::Impl final {
                    !known_independent_xinput(candidate.device_id);
         });
 
-        const auto keyboard = keyboard_gamepad_state();
+        const auto gameplay_keyboard_enabled = keyboard_controls_ != nullptr &&
+            keyboard_controls_->enabled.load(std::memory_order_acquire);
+        const auto keyboard = keyboard_gamepad_state(gameplay_keyboard_enabled);
         if (candidates.empty()) {
             NativeGamepadCandidate candidate;
             candidate.device_id = keyboard_device_domain | 1u;
             candidate.kind = NativeGamepadSourceKind::Keyboard;
-            candidate.state = keyboard;
+            candidate.state = keyboard.state;
             candidates.push_back(candidate);
         }
 
@@ -2662,6 +2693,17 @@ class NativePortPlatformServices::Impl final {
             candidate_used[candidate_index] = true;
         }
 
+        // A remaining P2-P4 pad keeps its slot when P1 disconnects. The
+        // optional keyboard must still reach P1 without moving that pad.
+        if (gameplay_keyboard_enabled && !placement[0].has_value()) {
+            NativeGamepadCandidate candidate;
+            candidate.device_id = keyboard_device_domain | 1u;
+            candidate.kind = NativeGamepadSourceKind::Keyboard;
+            candidate.state = keyboard.state;
+            placement[0] = candidates.size();
+            candidates.push_back(candidate);
+        }
+
         XINPUT_VIBRATION stopped{};
         for (std::size_t slot = 0u; slot < result.gamepads.size(); ++slot) {
             const auto old_device_id = input_device_ids_[slot];
@@ -2673,6 +2715,7 @@ class NativePortPlatformServices::Impl final {
             if (placement[slot].has_value()) {
                 const auto& replacement = candidates[*placement[slot]];
                 const auto retained_buttons =
+                    slot == 0u && keyboard.left_stick_active ? 0u :
                     detail::retain_buttons_across_neutral_keyboard_fallback(
                         input_button_stability_[slot],
                         previous.connected,
@@ -2719,7 +2762,7 @@ class NativePortPlatformServices::Impl final {
 
             auto destination = candidates[*placement[slot]].state;
             if (slot == 0u)
-                merge_keyboard_gamepad(destination, keyboard);
+                detail::merge_keyboard_gamepad(destination, keyboard);
             if (!same_logical_controller ||
                 (!correlated_handoff &&
                  input_button_stability_[slot].handoff_polls_remaining == 0u))
@@ -2935,6 +2978,34 @@ class NativePortPlatformServices::Impl final {
     [[nodiscard]] NativePortPlatformSnapshot snapshot() const {
         require_owner_thread();
         return telemetry_->snapshot;
+    }
+
+    void validate_input_initial_state(const std::span<const std::byte> bytes) {
+        require_owner_thread();
+        if (!input_initial_state_configured_) return;
+        input_initial_state_validated_ = false;
+        if (!input_initial_state_pending_)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_INVALID_STATE, "input-initial-state-already-started");
+        Sha256 hash;
+        hash.update(bytes.data(), bytes.size());
+        if (hash.finish() != input_initial_state_digest_)
+            fail_platform(NativePortPlatformFailure::ContentIdentity,
+                          ERROR_INVALID_DATA, "input-initial-state-changed");
+        input_initial_state_validated_ = true;
+    }
+
+    void start_input_after_initial_state_load() {
+        require_owner_thread();
+        if (!input_initial_state_configured_) return;
+        if (!input_initial_state_pending_ || !input_initial_state_validated_)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_INVALID_STATE, "input-initial-state-not-validated");
+        input_snapshot_ = {};
+        input_initial_state_pending_ = false;
+        input_initial_state_validated_ = false;
+        std::fprintf(stderr, "KATANA_NATIVE_INPUT_START_STATE status=loaded cursor=0 pre_load_polls=%llu\n",
+            static_cast<unsigned long long>(telemetry_->snapshot.input_polls));
     }
 
     void finalize_clean_shutdown() {
@@ -3191,6 +3262,7 @@ class NativePortPlatformServices::Impl final {
     std::uint32_t maximum_save_payload_bytes_ = 0u;
     std::thread::id owner_thread_;
     std::shared_ptr<PlatformTelemetry> telemetry_;
+    std::shared_ptr<NativePortKeyboardControls> keyboard_controls_;
     std::filesystem::path content_root_;
     std::filesystem::path user_data_root_;
     std::filesystem::path save_root_;
@@ -3221,6 +3293,10 @@ class NativePortPlatformServices::Impl final {
     std::filesystem::path input_record_path_;
     bool input_replay_mode_ = false;
     bool input_recording_finalized_ = false;
+    std::array<std::byte, 32u> input_initial_state_digest_{};
+    bool input_initial_state_configured_ = false;
+    bool input_initial_state_pending_ = false;
+    bool input_initial_state_validated_ = false;
     NativePortInputSnapshot input_snapshot_;
     std::array<std::uint64_t, native_port_gamepad_count> input_device_ids_{};
     std::array<NativeGamepadButtonStability, native_port_gamepad_count>
@@ -3261,6 +3337,8 @@ class NativePortPlatformServices::Impl final {
             NativePortPlatformFailure::UnsupportedHost, 1u, "unsupported-host");
     }
     [[nodiscard]] NativePortInputSnapshot poll_gamepads() { return {}; }
+    void validate_input_initial_state(std::span<const std::byte>) {}
+    void start_input_after_initial_state_load() {}
     [[nodiscard]] bool set_gamepad_vibration(
         std::uint32_t, const NativePortGamepadVibration&) { return false; }
     [[nodiscard]] NativePortSaveLoadResult load_save(
@@ -3401,6 +3479,15 @@ NativePortPlatformServices::open_content_range(
 
 NativePortInputSnapshot NativePortPlatformServices::poll_gamepads() {
     return impl_->poll_gamepads();
+}
+
+void NativePortPlatformServices::validate_input_initial_state(
+    const std::span<const std::byte> bytes) {
+    impl_->validate_input_initial_state(bytes);
+}
+
+void NativePortPlatformServices::start_input_after_initial_state_load() {
+    impl_->start_input_after_initial_state_load();
 }
 
 void NativePortPlatformServices::finalize_clean_shutdown() {

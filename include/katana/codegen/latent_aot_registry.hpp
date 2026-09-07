@@ -1,5 +1,7 @@
 #pragma once
 
+#include "katana/analysis/callback_table_source.hpp"
+
 #include "katana/analysis/hardware_audit.hpp"
 #include "katana/ir/ir.hpp"
 #include "katana/progress.hpp"
@@ -206,10 +208,11 @@ struct LatentAotExternalCallbackFieldSink final {
 };
 
 // Identity-bound primary-image consumer shape for callbacks stored in a
-// loaded-module record array.  The primary image proves the header-pointer
-// field, record stride, callback field and registrar ABI.  Discovery still
-// requires an immutable primary data pointer to the concrete module header
-// and a bounded terminating table in the exact candidate bytes.
+// loaded-module record array. The primary image proves the source, record
+// stride, callback field and consumer ABI. StaticVectorAddress is positive
+// bound RuntimeOnly inventory only and never proves table or selector-domain
+// completeness. Other forms still require a bounded terminating table in the
+// exact candidate bytes.
 struct LatentAotExternalCallbackRecordTable final {
     std::uint32_t function_address = 0u;
     std::uint32_t call_instruction_address = 0u;
@@ -221,8 +224,30 @@ struct LatentAotExternalCallbackRecordTable final {
     std::uint8_t callback_argument = 0u;
     std::uint8_t width = 0u;
 
+    katana::analysis::CallbackRecordTableSource source_kind =
+        katana::analysis::CallbackRecordTableSource::HeaderCount;
+    std::uint8_t table_argument = 0u;
+    // Canonical P1 runtime address for StaticVectorAddress; zero otherwise.
+    std::uint32_t vector_address = 0u;
+
     [[nodiscard]] bool operator==(
         const LatentAotExternalCallbackRecordTable&) const = default;
+};
+
+inline constexpr std::size_t
+    maximum_latent_aot_external_literal_transfer_candidates = 4096u;
+
+// One exact primary-image PC-relative literal consumed by a register call or
+// jump. This is positive RuntimeOnly discovery evidence for a loaded module;
+// it neither closes the primary transfer nor proves an ABI or target set.
+struct LatentAotExternalLiteralTransferCandidate final {
+    std::uint32_t call_instruction_address = 0u;
+    std::uint32_t literal_address = 0u;
+    std::uint32_t target_address = 0u;
+    bool call = false;
+
+    [[nodiscard]] bool operator==(
+        const LatentAotExternalLiteralTransferCandidate&) const = default;
 };
 
 struct LatentAotDiscoveryOptions {
@@ -320,6 +345,11 @@ struct LatentAotDiscoveryOptions {
         external_callback_field_sinks;
     std::span<const LatentAotExternalCallbackRecordTable>
         external_callback_record_tables;
+    // Sorted, unique primary-image literal transfers. Each target is projected
+    // only into an identity-consistent authoritative module and remains a
+    // guarded RuntimeOnly entry candidate.
+    std::span<const LatentAotExternalLiteralTransferCandidate>
+        external_literal_transfer_candidates;
 };
 
 // Permanent, disc-independent diagnostic for one already decoded latent
@@ -385,20 +415,34 @@ struct LatentAotModuleAuditResult {
     // evidence budget silently drops the complete exact set. Keep this last
     // so existing diagnostic fields retain their layout within source builds.
     std::vector<std::uint32_t> referenced_block_entry_offsets;
+    // Single-module audit only; these observations never grant entry authority.
+    // Each vector is the union over the bounded cold discovery passes.
+    std::vector<std::uint32_t> record_callback_proposed_offsets;
+    // Bringup-only discovery seeds from exact callback registrations. These
+    // do not prove a receiver ABI or promote a callback sink contract.
+    std::vector<std::uint32_t> registered_callback_receiver_candidate_offsets;
+    std::vector<std::uint32_t> callback_receiver_store_candidate_offsets;
+    std::vector<std::uint32_t> discovery_before_cfg_filter_offsets;
+    std::vector<std::uint32_t> discovery_after_cfg_filter_offsets;
+    std::vector<std::uint32_t> discovery_after_nonroot_filter_offsets;
 };
 
+// Audits retain their historical RuntimeOnly default. Explicit strict
+// completeness exercises the production Strict path without promoting candidates.
 [[nodiscard]] LatentAotModuleAuditResult audit_latent_aot_module(
     std::span<const std::uint8_t> decoded_bytes,
     std::uint32_t source_address,
     std::span<const std::uint32_t> entry_offsets,
-    const LatentAotDiscoveryOptions& options = {});
+    const LatentAotDiscoveryOptions& options = {},
+    bool strict_completeness = false);
 
 [[nodiscard]] LatentAotModuleAuditResult audit_latent_aot_module(
     std::span<const std::uint8_t> decoded_bytes,
     std::uint32_t source_address,
     std::span<const std::uint32_t> entry_offsets,
     std::uint32_t proven_runtime_base,
-    const LatentAotDiscoveryOptions& options = {});
+    const LatentAotDiscoveryOptions& options = {},
+    bool strict_completeness = false);
 
 // Product-parity audit for an encoded Sega PRS extent.  The registry owns the
 // bounded decode and retains the encoded source identity in the candidate
@@ -408,14 +452,16 @@ struct LatentAotModuleAuditResult {
     std::span<const std::uint8_t> encoded_bytes,
     std::uint32_t source_address,
     std::span<const std::uint32_t> entry_offsets,
-    const LatentAotDiscoveryOptions& options = {});
+    const LatentAotDiscoveryOptions& options = {},
+    bool strict_completeness = false);
 
 [[nodiscard]] LatentAotModuleAuditResult audit_latent_aot_sega_prs_module(
     std::span<const std::uint8_t> encoded_bytes,
     std::uint32_t source_address,
     std::span<const std::uint32_t> entry_offsets,
     std::uint32_t proven_runtime_base,
-    const LatentAotDiscoveryOptions& options = {});
+    const LatentAotDiscoveryOptions& options = {},
+    bool strict_completeness = false);
 
 struct LatentAotOccupiedRange {
     std::uint32_t start = 0u;

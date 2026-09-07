@@ -2,8 +2,12 @@
 
 #include "katana/analysis/abi.hpp"
 #include "katana/codegen/cache.hpp"
+#include "katana/codegen/boot_analysis_cache.hpp"
 #include "katana/codegen/latent_aot_analysis_cache.hpp"
 #include "katana/io/input_provenance.hpp"
+#include "../../src/analysis/static_callback_inventory.hpp"
+#include "../../src/analysis/guarded_native_entry_shape.hpp"
+#include "katana/sh4/disassembler.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1102,7 +1106,10 @@ std::string analysis_cache_key_for_module(
                               << ':' << table.record_stride << ':'
                               << table.callback_displacement << ':'
                               << +table.callback_argument << ':'
-                              << +table.width << ';';
+                              << +table.width << ':'
+                              << static_cast<unsigned>(table.source_kind) << ':'
+                              << +table.table_argument << ':'
+                              << table.vector_address << ';';
     }
     inputs.analyzer_implementation_id =
         std::string(
@@ -1112,10 +1119,709 @@ std::string analysis_cache_key_for_module(
     return katana::codegen::make_latent_aot_analysis_cache_key(inputs);
 }
 
+void bound_snapshot_vector_regressions() {
+    // Sonic's scene getter -> record selector -> published vector -> callback
+    // chain must also work when only code/literals, not the table, are immutable.
+    // These independent SH-4 fixtures contain no title bytes or addresses.
+    constexpr std::uint32_t base = 0x8C010000u;
+    for (unsigned variant = 0u; variant < 7u; ++variant) {
+        std::vector<std::uint8_t> bytes(0x220u, 0u);
+        const auto word = [&](const std::size_t at, const std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto pointer = [&](const std::size_t at, const std::uint32_t value) {
+            for (unsigned i = 0u; i < 4u; ++i)
+                bytes[at + i] = static_cast<std::uint8_t>(value >> (8u * i));
+        };
+        word(0u, 0x4F22u); word(2u, 0xD209u); word(4u, 0x420Bu);
+        word(6u, 9u); word(8u, 0xD108u); word(0xAu, 0x2102u);
+        word(0xCu, 0x4F26u); word(0xEu, 0xBu); word(0x10u, 9u);
+        pointer(0x28u, base + 0x40u); pointer(0x2Cu, base + 0x200u);
+        word(0x40u, 0xD001u); word(0x42u, 0xBu); word(0x44u, 9u);
+        pointer(0x48u, base + 0x180u);
+        word(0x80u, 0x6042u); word(0x82u, 0x6303u);
+        word(0x84u, 0x4008u); word(0x86u, 0x4008u); word(0x88u, 0x4000u);
+        word(0x8Au, 0x4308u); word(0x8Cu, 0x4300u); word(0x8Eu, 0x303Cu);
+        word(0x90u, 0xD108u); word(0x92u, 0x6212u); word(0x94u, 0x320Cu);
+        word(0x96u, 0x6322u); word(0x98u, 0xD107u); word(0x9Au, 0x2132u);
+        word(0x9Cu, 0xBu); word(0x9Eu, 9u);
+        pointer(0xB4u, base + 0x200u); pointer(0xB8u, base + 0x204u);
+        word(0xC0u, 0xD106u); word(0xC2u, 0x6112u); word(0xC4u, 0x5211u);
+        word(0xC6u, 0x422Bu); word(0xC8u, 9u); pointer(0xDCu, base + 0x204u);
+        pointer(0x180u, 0x8C900040u); pointer(0x1A8u, 0x8C900048u);
+        if (variant == 4u) bytes.resize(0x184u); // Field exists; full record does not.
+        katana::io::ExecutableImage image;
+        image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+        katana::io::ImageSegment segment{
+            "bound-vector-fixture", base, 0u, 0x220u,
+            katana::io::SegmentKind::Mixed, {true, true, true}, bytes};
+        segment.source_kind = variant == 1u || variant == 5u
+            ? katana::io::ImageSourceKind::Unknown
+            : katana::io::ImageSourceKind::RawBinary;
+        segment.local_source_name = variant == 3u ? "" : "bound-vector-fixture.bin";
+        // RuntimeMemory cannot carry immutable code; put only the records in
+        // that source class below, preserving the exact producer proof.
+        if (variant == 2u || variant == 6u) segment.bytes.resize(0x180u);
+        if (variant == 2u || variant == 6u) segment.memory_size = 0x180u;
+        image.add_segment(std::move(segment));
+        if (variant == 2u || variant == 6u) {
+            katana::io::ImageSegment records{
+                "record-fixture", base + 0x180u, 0u, 0xA0u,
+                katana::io::SegmentKind::Data, {variant != 6u, true, false},
+                std::vector<std::uint8_t>(bytes.begin() + 0x180u, bytes.end())};
+            records.source_kind = variant == 2u ? katana::io::ImageSourceKind::RuntimeMemory
+                                               : katana::io::ImageSourceKind::RawBinary;
+            records.local_source_name = "record-fixture.bin";
+            image.add_segment(std::move(records));
+        }
+        image.add_immutable_range({base, 0x100u, "fixture-code", 0u});
+        if (variant == 5u)
+            image.add_immutable_range({base + 0x180u, 0x50u, "fixture-records", 0u});
+        const auto immutable_count = image.immutable_ranges().size();
+        const auto lines = katana::sh4::disassemble(
+            std::span<const std::uint8_t>(bytes).first(0x100u), base);
+        std::vector<katana::analysis::FunctionCandidate> functions;
+        for (const auto offset : {0u, 0x40u, 0x80u, 0xC0u})
+            functions.push_back({base + offset, katana::analysis::AnalysisConfidence::Certain,
+                katana::analysis::ControlFlowEvidence::ProvenComplete, {}, 0x40u});
+        katana::analysis::detail::GuardedNativeEntryShapeCache shapes(image);
+        std::vector<katana::analysis::StaticCallbackRecordTableContract> tables;
+        const auto inventory = katana::analysis::detail::analyze_static_callback_inventory(
+            image, lines, functions, {}, {}, shapes, nullptr, nullptr, nullptr, &tables);
+        static_cast<void>(inventory);
+        std::vector<std::uint32_t> vectors;
+        for (const auto& table : tables)
+            if (table.source_kind == katana::analysis::CallbackRecordTableSource::StaticVectorAddress)
+                vectors.push_back(table.vector_address);
+        std::sort(vectors.begin(), vectors.end());
+        const auto expected = variant == 0u || variant == 5u
+            ? std::vector<std::uint32_t>{0x8C900040u, 0x8C900048u}
+            : std::vector<std::uint32_t>{};
+        require(vectors == expected && image.immutable_ranges().size() == immutable_count,
+            "Bound snapshot vector source/extent regression, variant=" + std::to_string(variant) +
+            ", vectors=" + std::to_string(vectors.size()));
+    }
+}
+
+void direct_sentinel_regressions() {
+    using Source = katana::analysis::CallbackRecordTableSource;
+    for (unsigned variant = 0u; variant < 4u; ++variant) {
+        constexpr std::uint32_t base = 0x8C010000u;
+        std::vector<std::uint8_t> bytes(0x68u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        word(0u, 0x6E43u); word(2u, 0x63E2u); word(4u, 0x2338u);
+        word(6u, variant == 1u ? 9u : 0x8907u);
+        word(8u, variant == 2u ? 0x2462u : 9u);
+        word(0xAu, 0x66E2u); word(0xCu, 0xB028u); word(0xEu, 9u);
+        word(0x10u, 0x7E08u); word(0x12u, 0x62E2u); word(0x14u, 0x2228u);
+        word(0x16u, 0x8BF7u); word(0x18u, 0xBu); word(0x1Au, 9u);
+        // Calling the supplied argument proves that this is a callback sink.
+        // A pointer store alone does not establish that contract.
+        word(0x60u, 0x460Bu); word(0x62u, 9u); word(0x64u, 0xBu); word(0x66u, 9u);
+        if (variant == 3u) word(0x60u, 0x2462u); // Unproven pointer store, not a callback consumer.
+        katana::io::ExecutableImage image;
+        katana::io::ImageSegment segment;
+        segment.name = "direct-sentinel-fixture";
+        segment.kind = katana::io::SegmentKind::Code;
+        segment.virtual_address = base; segment.memory_size = bytes.size();
+        segment.permissions = {true, false, true}; segment.bytes = bytes;
+        image.add_segment(std::move(segment)); image.add_entry_point(base);
+        auto lines = katana::sh4::disassemble(bytes, base);
+        const std::array candidates{
+            katana::analysis::FunctionCandidate{base, katana::analysis::AnalysisConfidence::Certain,
+                katana::analysis::ControlFlowEvidence::ProvenComplete, {}, 0x1Cu},
+            katana::analysis::FunctionCandidate{base + 0x60u, katana::analysis::AnalysisConfidence::Certain,
+                katana::analysis::ControlFlowEvidence::ProvenComplete, {}, 8u}};
+        katana::analysis::detail::GuardedNativeEntryShapeCache shapes{image};
+        std::vector<katana::analysis::StaticCallbackRecordTableContract> tables;
+        std::vector<katana::analysis::StaticCallbackSinkContract> sinks;
+        const auto inventory = katana::analysis::detail::analyze_static_callback_inventory(
+            image, lines, candidates, {}, {}, shapes, &sinks, nullptr, nullptr, &tables);
+        static_cast<void>(inventory);
+        const bool found = std::any_of(tables.begin(), tables.end(), [&](const auto& table) {
+            return table.source_kind == Source::DirectSentinelArgument &&
+                table.function_address == base && table.record_stride == 8u &&
+                table.callback_displacement == 0 && table.table_argument == 0u && table.callback_argument == 2u;
+        });
+        require(found == (variant == 0u), "Direct sentinel consumer proof/guard regression, variant=" +
+            std::to_string(variant) + ", sinks=" + std::to_string(sinks.size()) + ", tables=" + std::to_string(tables.size()));
+    }
+    for (unsigned variant = 0u; variant < 4u; ++variant) {
+        const bool relocated = variant == 3u;
+        const auto runtime = relocated ? 0x8C300000u : 0x8C900000u;
+        const auto stride = relocated ? 12u : 8u;
+        const auto field = relocated ? 4u : 0u;
+        const auto argument = static_cast<std::uint8_t>(relocated ? 3u : 0u);
+        std::vector<std::uint8_t> bytes(relocated ? 0x70u : 0x68u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto pointer = [&](std::size_t at, std::uint32_t value) {
+            for (unsigned i = 0u; i < 4u; ++i) bytes[at + i] = static_cast<std::uint8_t>(value >> (8u * i));
+        };
+        word(0u, relocated ? 0xD70Fu : 0xD40Fu); word(2u, 0xD210u); word(4u, 0x420Bu);
+        word(6u, variant == 2u ? 0xE400u : 9u); word(8u, 0xBu); word(0xAu, 9u);
+        word(0x20u, 0xBu); word(0x22u, 9u);
+        pointer(0x40u, runtime + 0x50u); pointer(0x44u, 0x8C010000u);
+        pointer(0x50u + field, runtime + 0x20u); pointer(0x50u + stride + field, runtime + 0x20u);
+        if (variant == 1u) pointer(0x60u, runtime + 0x20u);
+        const std::array contracts{katana::codegen::LatentAotExternalCallbackRecordTable{
+            0x8C010000u, 0x8C010010u, 0x8C01000Cu, 0x8C020000u,
+            0, stride, static_cast<std::int32_t>(field), 2u, 4u, Source::DirectSentinelArgument, argument}};
+        const std::array external{0x8C010000u, 0x8C020000u};
+        const std::array roots{0u};
+        katana::codegen::LatentAotDiscoveryOptions options;
+        options.completeness_policy = katana::codegen::LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
+        options.external_callback_record_tables = contracts; options.external_code_targets = external;
+        const auto audit = katana::codegen::audit_latent_aot_module(bytes,
+            relocated ? 0x85000000u : 0x84000000u, roots, runtime, options);
+        require(audit.admitted && audit.final_entry_offsets ==
+            (variant == 0u || relocated ? std::vector<std::uint32_t>{0u, 0x20u} : std::vector<std::uint32_t>{0u}),
+            "Direct sentinel repeated-target/termination/call-slot regression, variant=" + std::to_string(variant));
+    }
+}
+
+void callback_stack_frame_prefix_regressions() {
+    // ADV00's registered callback starts with saves and a stack allocation
+    // immediately before an independently known inner function boundary.
+    for (unsigned variant = 0u; variant < 7u; ++variant) {
+        auto bytes = fallthrough_prologue_callback_module(true);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        word(0x40u, 0x2FE6u); word(0x42u, 0x2FD6u);
+        word(0x44u, variant == 4u ? 9u : variant == 5u ? 0x7FFCu : 0x4F22u);
+        word(0x46u, variant == 1u ? 0x7F04u : variant == 2u ? 0x7FFEu
+            : variant == 3u ? 0x7EFCu : variant == 5u ? 0x4F22u
+            : variant == 6u ? 0x7F00u : 0x7FFCu);
+        word(0x48u, 0x7F04u); word(0x4Au, 0x4F26u);
+        word(0x4Cu, 0x6DF6u); word(0x4Eu, 0xBu); word(0x50u, 0x6EF6u);
+        const std::array roots{0u, 0x48u};
+        const std::array targets{0x8C040000u};
+        const std::array sinks{katana::codegen::LatentAotExternalCallbackSink{0x8C040000u, 4u, 0u}};
+        katana::codegen::LatentAotDiscoveryOptions options;
+        options.external_code_targets = targets;
+        options.external_callback_sinks = sinks;
+        const auto audit = katana::codegen::audit_latent_aot_module(
+            bytes, 0x88000000u, roots, 0x8C900000u, options);
+        const auto found = std::binary_search(audit.emitted_function_offsets.begin(),
+            audit.emitted_function_offsets.end(), 0x40u);
+        require(audit.admitted && found == (variant == 0u),
+            "Callback stack-frame prefix regression, variant=" + std::to_string(variant));
+    }
+}
+
+void registered_callback_receiver_candidate_regressions() {
+    // Sonic's external registrar knows the callback argument, while its no-op
+    // default cannot prove the callback's receiver ABI. Bringup may discover
+    // initializer stores, but must not turn that search into a Strict proof.
+    for (unsigned variant = 0u; variant < 6u; ++variant) {
+        constexpr auto runtime_base = 0x8C300000u;
+        constexpr auto source_base = 0x85000000u;
+        constexpr auto registrar = 0x8C120000u;
+        std::vector<std::uint8_t> bytes(0x60u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto pointer = [&](std::size_t at, std::uint32_t value) {
+            for (unsigned i = 0u; i < 4u; ++i)
+                bytes[at + i] = static_cast<std::uint8_t>(value >> (i * 8u));
+        };
+        word(0u, 0x4F22u); word(2u, 0xD206u); word(4u, 0xD506u);
+        word(6u, 0x420Bu); word(8u, variant == 3u ? 0xE500u : 0xE401u);
+        word(0xAu, 0x4F26u); word(0xCu, 0xBu); word(0xEu, 9u);
+        pointer(0x1Cu, registrar); pointer(0x20u, runtime_base + 0x30u);
+        word(0x30u, variant == 4u ? 0xEE00u : 0x6E43u);
+        word(0x32u, 0xD303u); word(0x34u, 0x1E34u);
+        word(0x36u, 0xBu); word(0x38u, 9u);
+        pointer(0x40u, runtime_base + 0x50u);
+        word(0x50u, 0xBu); word(0x52u, 9u);
+        const std::array roots{0u};
+        const std::array external{registrar};
+        const std::array callbacks{katana::codegen::LatentAotExternalCallbackSink{registrar, 2u, 0u}};
+        const std::array fields{katana::codegen::LatentAotExternalCallbackFieldSink{
+            0x8C130000u, 0x8C130008u, 0x8C130004u, 16, 4u, true,
+            static_cast<std::uint8_t>(variant == 5u ? 0u : 1u)}};
+        katana::codegen::LatentAotDiscoveryOptions options;
+        options.mode = katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+        options.completeness_policy = variant == 1u
+            ? katana::codegen::LatentAotCompletenessPolicy::Strict
+            : katana::codegen::LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
+        options.external_code_targets = external;
+        if (variant != 2u) options.external_callback_sinks = callbacks;
+        options.external_callback_field_sinks = fields;
+        const auto audit = katana::codegen::audit_latent_aot_module(
+            bytes, source_base, roots, runtime_base, options, variant == 1u);
+        const auto contains = [](const auto& values, std::uint32_t value) {
+            return std::find(values.begin(), values.end(), value) != values.end();
+        };
+        require(callbacks[0].record_argument_mask == 0u,
+                "Receiver candidate must not mutate the registrar ABI contract");
+        if (variant == 1u) {
+            require(audit.registered_callback_receiver_candidate_offsets.empty(),
+                    "Strict discovery must not seed receiver candidates");
+        } else {
+            require(audit.admitted &&
+                        contains(audit.emitted_function_offsets, 0x50u) == (variant == 0u),
+                    "Registered callback receiver candidate regression, variant=" + std::to_string(variant));
+            require(contains(audit.registered_callback_receiver_candidate_offsets, 0x30u) ==
+                        (variant == 0u || variant == 4u || variant == 5u),
+                    "Receiver candidate requires an exact outgoing callback registration");
+        }
+    }
+}
+
+void anchored_code_vector_regressions() {
+    // Sonic's scene descriptor is stored in another image and its callbacks
+    // use runtime addresses. A proven runtime base already admits ordinary
+    // four-entry vectors; anchors restrict the carrier scan rather than add
+    // code authority. Exercise malformed anchored vectors at the helper
+    // boundary so the full audit's independent vector discovery cannot turn
+    // a negative fixture into a false test expectation.
+    for (unsigned variant = 0u; variant < 8u; ++variant) {
+        constexpr auto runtime_base = 0x8C300000u;
+        std::vector<std::uint8_t> bytes(0xB0u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto pointer = [&](std::size_t at, std::uint32_t value) {
+            for (unsigned i = 0u; i < 4u; ++i)
+                bytes[at + i] = static_cast<std::uint8_t>(value >> (8u * i));
+        };
+        word(0u, 0xBu); word(2u, 9u);
+        for (unsigned i = 0u; i < 4u; ++i) {
+            const auto at = 0x40u + i * 0x10u;
+            word(at, static_cast<std::uint16_t>(0xE000u + i));
+            word(at + 2u, 0xBu); word(at + 4u, 9u);
+            pointer(0x80u + i * 4u, runtime_base + at);
+        }
+        if (variant == 2u) pointer(0x8Cu, 0u); // only three entries
+        if (variant == 3u || variant == 4u || variant == 5u) {
+            pointer(0x88u, 0u); pointer(0x8Cu, 0u);
+            if (variant != 3u) {
+                pointer(0x90u, runtime_base + (variant == 5u ? 0x50u : 0x40u));
+                pointer(0x94u, runtime_base + (variant == 5u ? 0x40u : 0x50u));
+            }
+        }
+        if (variant == 6u) pointer(0x8Cu, runtime_base + 0x74u); // physical delay slot
+        if (variant == 7u) {
+            for (unsigned i = 0u; i < 4u; ++i)
+                pointer(0x80u + i * 4u, 0xAC300040u + i * 0x10u);
+        }
+        const std::array roots{0u};
+        const std::array anchors{runtime_base + 0x80u, runtime_base + 0x90u};
+        if (variant <= 1u) {
+            katana::codegen::LatentAotDiscoveryOptions options;
+            options.mode = katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+            options.completeness_policy =
+                katana::codegen::LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
+            if (variant == 0u) options.external_data_targets = anchors;
+            const auto audit = katana::codegen::audit_latent_aot_module(
+                bytes, 0x85000000u, roots, runtime_base, options);
+            const auto contains = [&](const std::uint32_t target) {
+                return std::find(audit.emitted_function_offsets.begin(),
+                    audit.emitted_function_offsets.end(), target) !=
+                    audit.emitted_function_offsets.end();
+            };
+            require(audit.admitted && contains(0x40u) && contains(0x50u) &&
+                        contains(0x60u) && contains(0x70u),
+                    "Anchored code-vector audit integration regression, variant=" +
+                        std::to_string(variant));
+        }
+
+        katana::io::ExecutableImage image;
+        image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+        katana::io::ImageSegment segment{
+            "anchored-vector-fixture", runtime_base, 0u, bytes.size(),
+            katana::io::SegmentKind::Mixed, {true, false, true}, bytes};
+        image.add_segment(std::move(segment));
+        katana::analysis::detail::GuardedNativeEntryShapeCache shapes{image};
+        const auto helper_anchors = variant == 1u
+            ? std::span<const std::uint32_t>{}
+            : std::span<const std::uint32_t>{anchors};
+        const auto discovered =
+            katana::analysis::detail::discover_anchored_static_code_pointer_vectors(
+                image, image.segments().front(), helper_anchors, shapes);
+        const auto discovered_contains = [&](const std::uint32_t target) {
+            return std::any_of(discovered.candidates.begin(), discovered.candidates.end(),
+                [&](const auto& candidate) {
+                    return candidate.target_address == runtime_base + target;
+                });
+        };
+        const bool four = variant == 0u || variant == 7u;
+        const bool pair = variant == 4u;
+        require(!discovered.truncated &&
+                    discovered_contains(0x40u) == (four || pair) &&
+                    discovered_contains(0x50u) == (four || pair) &&
+                    discovered_contains(0x60u) == four &&
+                    discovered_contains(0x70u) == four,
+                "Anchored code-vector helper regression, variant=" +
+                    std::to_string(variant));
+    }
+}
+
+void record_store_join_regressions() {
+    // Sonic's staged callbacks select PC literals on opposite sides of a
+    // branch and publish at a shared store. No retail addresses/bytes here.
+    for (unsigned variant = 0u; variant < 5u; ++variant) {
+        const auto runtime_base = variant == 1u ? 0x8C300000u : 0x8C900000u;
+        const auto source_base = variant == 1u ? 0x85000000u : 0x84000000u;
+        const auto field = variant == 1u ? 0x18u : 0x10u;
+        std::vector<std::uint8_t> bytes(0x50u, 0u);
+        const auto word = [&](const std::size_t at, const std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto pointer = [&](const std::size_t at, const std::uint32_t value) {
+            for (unsigned i = 0u; i < 4u; ++i)
+                bytes[at + i] = static_cast<std::uint8_t>(value >> (i * 8u));
+        };
+        word(0u, 0x6E43u); word(2u, 0x2008u); word(4u, 0x8903u);
+        word(6u, 0xD30Eu); word(8u, 0xA004u); word(0xAu, 9u);
+        word(0xCu, 9u); word(0xEu, variant == 2u ? 0xE301u : 0xD30Du);
+        word(0x10u, 9u); word(0x12u, 9u);
+        word(0x14u, static_cast<std::uint16_t>(0x1E30u | (field / 4u)));
+        word(0x16u, 0xBu); word(0x18u, 9u);
+        word(0x20u, 0x6E43u); word(0x22u, 0xD309u);
+        word(0x24u, static_cast<std::uint16_t>(0x1E30u | (field / 4u)));
+        word(0x26u, 0xBu); word(0x28u, 9u);
+        word(0x30u, 0xBu); word(0x32u, 9u);
+        word(0x38u, 0xBu); word(0x3Au, 9u);
+        pointer(0x40u, runtime_base + 0x20u);
+        pointer(0x44u, runtime_base + 0x30u);
+        pointer(0x48u, runtime_base + 0x38u);
+        if (variant == 3u) {
+            // A literal written in a call delay slot is volatile on return.
+            word(2u, 0xD210u); word(4u, 0x420Bu); word(6u, 0xD30Eu);
+            word(8u, 0x1E34u); word(0xAu, 0xBu); word(0xCu, 9u);
+            pointer(0x44u, 0x8C100000u);
+        }
+        const std::array sinks{katana::codegen::LatentAotExternalCallbackFieldSink{
+            0x8C010000u, 0x8C010010u, 0x8C010008u,
+            static_cast<std::int32_t>(field), 4u, true,
+            static_cast<std::uint8_t>(variant == 4u ? 0u : 1u)}};
+        const std::array roots{0u};
+        katana::codegen::LatentAotDiscoveryOptions options;
+        options.completeness_policy = katana::codegen::LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
+        options.external_callback_field_sinks = sinks;
+        const auto audit = katana::codegen::audit_latent_aot_module(
+            bytes, source_base, roots, runtime_base, options);
+        const std::vector<std::uint32_t> expected = variant == 2u || variant == 3u
+            ? std::vector<std::uint32_t>{0u}
+            : variant == 4u ? std::vector<std::uint32_t>{0u, 0x20u, 0x30u}
+                            : std::vector<std::uint32_t>{0u, 0x20u, 0x30u, 0x38u};
+        require(audit.admitted && audit.final_entry_offsets == expected,
+                "Record callback join/ABI/delay-slot regression, variant=" + std::to_string(variant));
+    }
+}
+
+void external_literal_transfer_regressions() {
+    constexpr std::uint32_t base = 0x8C010000u;
+    constexpr std::uint32_t runtime = 0x8C900000u;
+    for (unsigned variant = 0u; variant < 19u; ++variant) {
+        std::vector<std::uint8_t> bytes(0x30u, 0u);
+        const auto word = [&](const std::size_t at, const std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        word(0u, 0xD205u); word(2u, 9u); word(4u, 0x420Bu); word(6u, 9u);
+        if (variant == 1u) word(2u, 0xE207u);
+        if (variant == 2u) word(2u, 0x430Bu);
+        if (variant == 3u) word(6u, 0xE207u);
+        if (variant == 10u) { word(2u, 0x6323u); word(4u, 0x430Bu); }
+        if (variant == 11u) word(4u, 0x422Bu);
+        const auto target = variant == 8u ? 0x0C900041u :
+                            variant == 9u ? base + 0x20u :
+                            variant == 12u ? 0xAC900040u : 0x0C900040u;
+        for (unsigned byte = 0u; byte < 4u; ++byte)
+            bytes[0x18u + byte] = static_cast<std::uint8_t>(target >> (byte * 8u));
+        auto lines = katana::sh4::disassemble(
+            std::span<const std::uint8_t>{bytes}.first(8u), base);
+        if (variant == 4u) bytes.resize(0x1Au);
+        if (variant == 7u) word(0u, 9u); // Decoded view no longer matches source.
+        if (variant == 14u) lines.erase(lines.begin() + 1);
+        if (variant == 15u) {
+            auto conflicting = lines.front(); conflicting.is_delay_slot = true;
+            lines.push_back(conflicting);
+        }
+        katana::io::ExecutableImage image;
+        image.set_address_model(variant == 16u ? katana::io::ImageAddressModel::Exact :
+            katana::io::ImageAddressModel::Sh4DirectMapped);
+        katana::io::ImageSegment segment;
+        segment.name = "resident-literal-fixture"; segment.virtual_address = base;
+        segment.kind = katana::io::SegmentKind::Mixed;
+        segment.memory_size = 0x30u; segment.permissions = {true, false, true};
+        segment.local_source_name = "resident.bin";
+        segment.source_kind = variant == 5u ? katana::io::ImageSourceKind::RuntimeMemory :
+            variant == 6u || variant == 13u ? katana::io::ImageSourceKind::Unknown :
+            katana::io::ImageSourceKind::RawBinary;
+        segment.bytes = bytes; image.add_segment(std::move(segment));
+        if (variant == 6u)
+            image.add_immutable_range({base, bytes.size(),
+                katana::io::sha256_bytes(std::string_view{
+                    reinterpret_cast<const char*>(bytes.data()), bytes.size()}), 0u});
+        std::vector<katana::analysis::detail::StaticExternalLiteralTransferBlock> blocks{{base, 8u}};
+        if (variant == 17u) blocks = {{base, 2u}, {base + 2u, 6u}};
+        if (variant == 18u) blocks.clear();
+        const auto candidates = katana::analysis::detail::
+            discover_external_literal_transfer_candidates(image, lines, blocks, base, 0x30u);
+        const bool expected = variant == 0u || variant == 3u || variant == 6u ||
+                              variant == 10u || variant == 11u || variant == 12u;
+        require(candidates.size() == (expected ? 1u : 0u),
+            "Resident literal producer regression variant=" + std::to_string(variant));
+        if (expected)
+            require(candidates.front() == katana::analysis::detail::
+                StaticExternalLiteralTransferCandidate{base + 4u, base + 0x18u,
+                    runtime + 0x40u, variant != 11u},
+                "Resident literal producer lost exact source/call/alias binding");
+    }
+
+    std::vector<std::uint8_t> module(0x50u, 0u);
+    const auto word = [&](const std::size_t at, const std::uint16_t value) {
+        module[at] = static_cast<std::uint8_t>(value);
+        module[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    word(0u, 0xBu); word(2u, 9u);
+    word(0x40u, 0x2FE6u); word(0x42u, 0x4F22u); word(0x44u, 0xE001u);
+    word(0x46u, 0x4F26u); word(0x48u, 0xBu); word(0x4Au, 0x6EF6u);
+    const std::array roots{0u};
+    for (unsigned variant = 0u; variant < 6u; ++variant) {
+        const std::array candidates{katana::codegen::LatentAotExternalLiteralTransferCandidate{
+            base + 4u, base + 0x18u,
+            variant == 3u ? runtime + 2u : runtime + 0x40u, variant != 5u}};
+        katana::codegen::LatentAotDiscoveryOptions options;
+        if (variant != 1u)
+            options.completeness_policy = katana::codegen::
+                LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
+        options.external_literal_transfer_candidates = candidates;
+        const auto audit = variant == 2u
+            ? katana::codegen::audit_latent_aot_module(module, 0x84000000u, roots, options)
+            : katana::codegen::audit_latent_aot_module(module, 0x84000000u, roots,
+                variant == 4u ? runtime + 0x10000u : runtime, options, variant == 1u);
+        const bool expected = variant == 0u || variant == 5u;
+        require(audit.admitted &&
+                std::binary_search(audit.final_entry_offsets.begin(), audit.final_entry_offsets.end(), 0x40u) == expected &&
+                !std::binary_search(audit.final_entry_offsets.begin(), audit.final_entry_offsets.end(), 2u),
+            "Resident literal module binding/strict/delay regression variant=" + std::to_string(variant));
+    }
+    const auto inferred_module = conflicting_loader_tail_bases_module(
+        0x8C600000u, 0x8C200000u, false);
+    const std::array inferred_roots{0u, 0x40u, 0x80u};
+    const std::array unbound_transfer{katana::codegen::LatentAotExternalLiteralTransferCandidate{
+        base + 4u, base + 0x18u, 0x8C200240u, true}};
+    katana::codegen::LatentAotDiscoveryOptions inferred_options;
+    inferred_options.external_literal_transfer_candidates = unbound_transfer;
+    const auto unbound = katana::codegen::audit_latent_aot_module(
+        inferred_module, 0x84000000u, inferred_roots, inferred_options);
+    require(unbound.admitted && unbound.inferred_runtime_base == 0x8C200000u &&
+            !std::binary_search(unbound.final_entry_offsets.begin(), unbound.final_entry_offsets.end(), 0x240u),
+        "An inferred pointer-cluster base authorized a resident-to-module literal transfer");
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
+        if (argc == 5 && std::string_view(argv[1]) == "--anchored-vectors") {
+            std::ifstream input(argv[2], std::ios::binary);
+            std::ifstream anchor_input(argv[4]);
+            require(input.good() && anchor_input.good(), "Cannot read vector audit inputs");
+            std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(input), {}};
+            const auto base = static_cast<std::uint32_t>(std::stoul(argv[3], nullptr, 0));
+            require(!bytes.empty() && bytes.size() <= 32u * 1024u * 1024u &&
+                static_cast<std::uint64_t>(base) + bytes.size() <= 0x100000000ull,
+                "Vector audit image extent invalid");
+            std::vector<std::uint32_t> anchors;
+            std::string line;
+            while (std::getline(anchor_input, line)) {
+                if (line.empty()) continue;
+                anchors.push_back(static_cast<std::uint32_t>(std::stoul(line, nullptr, 0)));
+                require(anchors.size() <= 65536u, "Vector audit anchor budget exceeded");
+            }
+            std::sort(anchors.begin(), anchors.end());
+            anchors.erase(std::unique(anchors.begin(), anchors.end()), anchors.end());
+            katana::io::ExecutableImage image;
+            image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+            katana::io::ImageSegment segment{
+                "vector-audit", base, 0u, bytes.size(), katana::io::SegmentKind::Mixed,
+                {true, false, true}, std::move(bytes)};
+            image.add_segment(std::move(segment));
+            katana::analysis::detail::GuardedNativeEntryShapeCache shapes(image);
+            const auto result = katana::analysis::detail::discover_anchored_static_code_pointer_vectors(
+                image, image.segments().front(), anchors, shapes);
+            std::cout << "{\"truncated\":" << (result.truncated ? "true" : "false") << ",\"entries\":[";
+            bool first = true;
+            for (const auto& candidate : result.candidates) {
+                if (!first) std::cout << ',';
+                first = false;
+                std::cout << candidate.target_address - base;
+            }
+            std::cout << "]}\n";
+            return result.truncated ? 1 : 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--anchored-vectors") {
+            anchored_code_vector_regressions();
+            std::cout << "anchored-vectors: 8 focused regressions passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--bound-snapshot-vectors") {
+            bound_snapshot_vector_regressions();
+            std::cout << "bound-snapshot-vectors: 7 focused regressions passed\n";
+            return 0;
+        }
+        // Inspect the existing production checkpoint without rerunning CFA.
+        // The result is diagnostic data, never callable/export authority.
+        if (argc >= 6 && std::string_view(argv[1]) == "--callback-checkpoint-contracts") {
+            const auto offset = std::stoull(argv[3], nullptr, 0);
+            const auto size = std::stoull(argv[4], nullptr, 0);
+            const auto file_size = std::filesystem::file_size(argv[2]);
+            if (size > katana::codegen::maximum_boot_analysis_cache_artifact_bytes ||
+                offset > file_size || size > file_size - offset)
+                throw std::invalid_argument("Checkpoint slice outside bounded artifact");
+            std::ifstream input(argv[2], std::ios::binary);
+            if (!input) throw std::runtime_error("Cannot read analysis checkpoint");
+            input.seekg(static_cast<std::streamoff>(offset));
+            std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+            if (!input.read(reinterpret_cast<char*>(bytes.data()),
+                            static_cast<std::streamsize>(bytes.size())))
+                throw std::runtime_error("Incomplete analysis checkpoint");
+            const auto parsed = katana::codegen::parse_boot_analysis_checkpoint(argv[5], bytes);
+            if (parsed.state != katana::codegen::BootAnalysisCacheState::Hit)
+                throw std::runtime_error("Checkpoint rejected: " + parsed.reason);
+            const auto& analysis = parsed.artifact.analysis;
+            std::cerr << "checkpoint materialized=" << analysis.static_callback_contracts_materialized
+                      << " tables=" << analysis.static_callback_record_tables.size()
+                      << " fields=" << analysis.static_callback_field_sinks.size() << '\n';
+            for (int i = 6; i < argc; ++i) {
+                const auto focus = static_cast<std::uint32_t>(std::stoul(argv[i], nullptr, 0));
+                for (const auto& function : analysis.recursive.functions)
+                    if (function.address == focus)
+                        std::cerr << "function:" << std::hex << function.address
+                                  << ':' << function.size << '\n';
+            }
+            for (const auto& t : analysis.static_callback_record_tables)
+                std::cout << std::hex << t.function_address << ':' << t.call_instruction_address << ':'
+                    << t.callback_load_instruction_address << ':' << t.callback_sink_address << ':'
+                    << t.record_stride << ':' << t.callback_displacement << ':'
+                    << +t.callback_argument << ':' << +t.table_argument << ':'
+                    << static_cast<unsigned>(t.source_kind) << ':' << t.vector_address << '\n';
+            return 0;
+        }
+        // Read-only source diagnostic: explicit function spans are inputs,
+        // not additional callable authority. No game bytes/addresses in this tool.
+        if (argc >= 5 && (std::string_view(argv[1]) == "--callback-source-contracts" ||
+                          std::string_view(argv[1]) == "--callback-bound-source-contracts" ||
+                          std::string_view(argv[1]) == "--external-literal-source-candidates")) {
+            const bool literal_transfers = std::string_view(argv[1]) == "--external-literal-source-candidates";
+            const bool bound_file_records = std::string_view(argv[1]) == "--callback-bound-source-contracts";
+            std::ifstream input(argv[2], std::ios::binary);
+            if (!input) throw std::runtime_error("Cannot read callback source image");
+            std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(input), {}};
+            const auto base = static_cast<std::uint32_t>(std::stoul(argv[3], nullptr, 0));
+            katana::io::ExecutableImage image;
+            image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+            katana::io::ImageSegment segment;
+            segment.name = "callback-source-audit"; segment.virtual_address = base;
+            segment.kind = katana::io::SegmentKind::Mixed;
+            segment.memory_size = bytes.size(); segment.permissions = {true, false, true};
+            segment.source_kind = katana::io::ImageSourceKind::RawBinary;
+            segment.local_source_name = std::filesystem::path(argv[2]).filename().string();
+            segment.bytes = bytes; image.add_segment(std::move(segment));
+            if (!bound_file_records)
+                image.add_immutable_range({base, bytes.size(),
+                    katana::io::sha256_bytes(std::string_view{
+                        reinterpret_cast<const char*>(bytes.data()), bytes.size()}), 0u});
+            std::vector<katana::sh4::DisassemblyLine> lines;
+            std::vector<katana::analysis::FunctionCandidate> functions;
+            std::vector<katana::analysis::detail::StaticExternalLiteralTransferBlock> literal_blocks;
+            for (int i = 4; i < argc; ++i) {
+                const std::string spec(argv[i]); const auto separator = spec.find(':');
+                if (separator == std::string::npos) throw std::invalid_argument("Expected entry:span[:boundary]");
+                const auto entry = static_cast<std::uint32_t>(std::stoul(spec.substr(0, separator), nullptr, 0));
+                const auto size = static_cast<std::uint32_t>(std::stoul(spec.substr(separator + 1u), nullptr, 0));
+                const auto boundary_separator = spec.find(':', separator + 1u);
+                const auto boundary_size = boundary_separator == std::string::npos
+                    ? size : static_cast<std::uint32_t>(std::stoul(spec.substr(boundary_separator + 1u), nullptr, 0));
+                if (boundary_size > size) throw std::invalid_argument("Boundary exceeds decoded source span");
+                if (entry < base || static_cast<std::uint64_t>(entry - base) + size > bytes.size())
+                    throw std::invalid_argument("Function span outside source image");
+                if (literal_transfers) literal_blocks.push_back({entry, size});
+                if (bound_file_records)
+                    image.add_immutable_range({entry, size,
+                        katana::io::sha256_bytes(std::string_view{
+                            reinterpret_cast<const char*>(bytes.data() + entry - base), size}), 0u});
+                auto part = katana::sh4::disassemble(std::span<const std::uint8_t>{bytes}.subspan(entry - base, size), entry);
+                lines.insert(lines.end(), part.begin(), part.end());
+                functions.push_back({entry, katana::analysis::AnalysisConfidence::Certain,
+                    katana::analysis::ControlFlowEvidence::ProvenComplete, {}, boundary_size});
+            }
+            std::sort(lines.begin(), lines.end(), [](const auto& a, const auto& b) { return a.address < b.address; });
+            if (literal_transfers) {
+                for (const auto& candidate : katana::analysis::detail::
+                        discover_external_literal_transfer_candidates(image, lines, literal_blocks, base, bytes.size()))
+                    std::cout << std::hex << candidate.call_instruction_address << ':'
+                        << candidate.literal_address << ':' << candidate.target_address << ':'
+                        << (candidate.call ? "call" : "jump") << '\n';
+                return 0;
+            }
+            katana::analysis::detail::GuardedNativeEntryShapeCache shapes{image};
+            std::vector<katana::analysis::StaticCallbackRecordTableContract> tables;
+            std::vector<katana::analysis::StaticCallbackSinkContract> sinks;
+            const auto inventory = katana::analysis::detail::analyze_static_callback_inventory(
+                image, lines, functions, {}, {}, shapes, &sinks, nullptr, nullptr, &tables);
+            static_cast<void>(inventory);
+            for (const auto& sink : sinks)
+                std::cerr << "sink:" << std::hex << sink.function_address << ':' << +sink.argument_mask << '\n';
+            for (const auto& sink : sinks)
+                std::cerr << "record-sink:" << std::hex << sink.function_address << ':' << +sink.record_argument_mask << '\n';
+            for (const auto& t : tables)
+                std::cout << std::hex << t.function_address << ':' << t.call_instruction_address << ':'
+                    << t.callback_load_instruction_address << ':' << t.callback_sink_address << ':'
+                    << t.record_stride << ':' << t.callback_displacement << ':'
+                    << +t.callback_argument << ':' << +t.table_argument << ':'
+                    << static_cast<unsigned>(t.source_kind) << ':'
+                    << t.vector_address << '\n';
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--direct-sentinel") {
+            direct_sentinel_regressions();
+            std::cout << "direct-sentinel: 8 focused regressions passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--external-literal-transfers") {
+            external_literal_transfer_regressions();
+            std::cout << "external-literal-transfers: 26 focused regressions passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--callback-stack-frame") {
+            callback_stack_frame_prefix_regressions();
+            std::cout << "callback-stack-frame: 7 focused regressions passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--registered-callback-receiver") {
+            registered_callback_receiver_candidate_regressions();
+            std::cout << "registered-callback-receiver: 6 focused regressions passed\n";
+            return 0;
+        }
+        record_store_join_regressions();
+        if (argc == 2 && std::string_view(argv[1]) == "--record-store-join") {
+            std::cout << "record-store-join: 5 focused regressions passed\n";
+            return 0;
+        }
+        if (argc != 1) throw std::invalid_argument("Unknown test filter");
+        bound_snapshot_vector_regressions();
+        anchored_code_vector_regressions();
+        callback_stack_frame_prefix_regressions();
+        registered_callback_receiver_candidate_regressions();
+        direct_sentinel_regressions();
         constexpr std::uint32_t relocation_base = 0x89000000u;
         katana::ir::Instruction mova;
         mova.source_address = relocation_base;

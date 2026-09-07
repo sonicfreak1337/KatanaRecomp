@@ -91,6 +91,11 @@
 #endif
 
 namespace katana::codegen {
+[[nodiscard]] std::vector<katana::sh4::DisassemblyLine>
+rehydrate_analyzed_instruction_slice(
+    const katana::io::ExecutableImage& image,
+    std::span<const katana::ir::Function> program);
+
 namespace {
 
 void report_progress(const PortExportOptions& options, const std::string_view phase) {
@@ -17413,10 +17418,18 @@ std::string native_product_main(
            "                  definition.bootstrap.status_register,\n"
            "                  definition.bootstrap.fpscr});\n"
            "        katana::runtime::NativePortPlatformConfig platform_config;\n"
+           "        if (!input_replay_launch)\n"
+           "            platform_config.keyboard_controls = std::make_shared<\n"
+           "                katana::runtime::NativePortKeyboardControls>();\n"
            "        platform_config.content_root = content_root;\n"
            "        platform_config.user_data_root =\n"
            "            native_product_user_data_root();\n"
            "        platform_config.project_id = definition.project_id;\n"
+           "        if (const auto* initial_state = std::getenv(\n"
+           "                \"KATANA_NATIVE_INPUT_START_STATE\");\n"
+           "            initial_state != nullptr && *initial_state != 0)\n"
+           "            platform_config.input_initial_state_path =\n"
+           "                std::filesystem::u8path(initial_state);\n"
            "        platform_config.input_identity = " +
            katana::io::quote_json(input_compatibility_identity) +
            ";\n"
@@ -17440,6 +17453,8 @@ std::string native_product_main(
            "        katana::runtime::NativePortPlatformServices platform(\n"
            "            platform_config);\n"
            "        katana::runtime::NativePortGraphicsConfig graphics_config;\n"
+           "        graphics_config.keyboard_controls =\n"
+           "            platform_config.keyboard_controls;\n"
            "        graphics_config.title = definition.project_id;\n"
            "        const auto native_product_development_state_directory =\n"
            "            (platform_config.user_data_root / definition.project_id /\n"
@@ -25902,13 +25917,22 @@ latent_aot_analyzed_external_callback_sinks(
                 table.callback_load_instruction_address);
             const auto sink = latent_aot_external_code_address(
                 table.callback_sink_address);
-             if (!function.has_value() || !call.has_value() ||
-                 !load.has_value() || !sink.has_value() ||
-                 table.width != 4u || table.callback_argument >= 4u ||
-                 table.header_table_pointer_displacement < 4 ||
-                 (table.header_table_pointer_displacement & 3) != 0 ||
-                 table.header_table_pointer_displacement > 4096 ||
-                 table.callback_displacement < 0 ||
+            const auto vector = table.vector_address == 0u
+                                    ? std::optional<std::uint32_t>{0u}
+                                    : latent_aot_external_code_address(
+                                          table.vector_address);
+            const bool static_vector = table.source_kind ==
+                katana::analysis::CallbackRecordTableSource::StaticVectorAddress;
+            if (!function.has_value() || !call.has_value() ||
+                !load.has_value() || !sink.has_value() ||
+                !vector.has_value() ||
+                table.width != 4u || table.callback_argument >= 4u ||
+                !katana::analysis::valid_callback_table_source(
+                    table.source_kind, table.table_argument,
+                    table.header_table_pointer_displacement, *vector) ||
+                *vector != table.vector_address ||
+                (static_vector && *sink != *function) ||
+                table.callback_displacement < 0 ||
                 (table.callback_displacement & 3) != 0 ||
                 table.record_stride < 4u ||
                 table.record_stride > 256u ||
@@ -25931,7 +25955,10 @@ latent_aot_analyzed_external_callback_sinks(
                  table.record_stride,
                  table.callback_displacement,
                  table.callback_argument,
-                 table.width});
+                 table.width,
+                 table.source_kind,
+                 table.table_argument,
+                 *vector});
         }
         std::sort(
             callback_record_tables->begin(),
@@ -25946,7 +25973,10 @@ latent_aot_analyzed_external_callback_sinks(
                            left.record_stride,
                            left.callback_displacement,
                            left.callback_argument,
-                           left.width) <
+                           left.width,
+                           left.source_kind,
+                           left.table_argument,
+                           left.vector_address) <
                        std::tie(
                            right.function_address,
                            right.call_instruction_address,
@@ -25956,7 +25986,10 @@ latent_aot_analyzed_external_callback_sinks(
                            right.record_stride,
                            right.callback_displacement,
                            right.callback_argument,
-                           right.width);
+                           right.width,
+                           right.source_kind,
+                           right.table_argument,
+                           right.vector_address);
             });
         callback_record_tables->erase(
             std::unique(callback_record_tables->begin(),
@@ -25967,18 +26000,68 @@ latent_aot_analyzed_external_callback_sinks(
 }
 
 std::vector<std::uint32_t>
-latent_aot_materialized_callback_field_sink_primary_targets(
+latent_aot_materialized_callback_consumer_primary_targets(
     const katana::io::ExecutableImage& image,
     const katana::analysis::ControlFlowAnalysisResult& analysis) {
     constexpr std::size_t maximum_field_sink_contracts = 16'384u;
     constexpr std::uint32_t maximum_inferred_owner_extent = 64u * 1024u;
     constexpr std::size_t maximum_owner_revalidation_instructions =
         4'194'304u;
-    const auto& sinks = analysis.static_callback_field_sinks;
-    if (!analysis.static_callback_contracts_materialized || sinks.empty() ||
-        sinks.size() > maximum_field_sink_contracts ||
+    if (!analysis.static_callback_contracts_materialized ||
+        analysis.static_callback_field_sinks.size() >
+            maximum_field_sink_contracts ||
+        analysis.static_callback_record_tables.size() >
+            maximum_field_sink_contracts -
+                analysis.static_callback_field_sinks.size() ||
         analysis.instruction_arena == nullptr)
         return {};
+
+    auto sinks = analysis.static_callback_field_sinks;
+    // A consumed static vector need not receive its carrier as an argument,
+    // and its primary consumer need not be called by a loaded module. Reprove
+    // those final-CFA consumers with the same owner/load/transfer checks as
+    // ordinary field sinks before exposing the contracts to loaded AOT.
+    // This admits the authenticated consumer, never the vector's raw targets.
+    for (const auto& table : analysis.static_callback_record_tables) {
+        if (table.source_kind !=
+                katana::analysis::CallbackRecordTableSource::StaticVectorAddress ||
+            !katana::analysis::valid_callback_table_source(
+                table.source_kind, table.table_argument,
+                table.header_table_pointer_displacement, table.vector_address) ||
+            table.callback_sink_address != table.function_address ||
+            table.width != 4u || table.callback_argument >= 4u ||
+            table.record_stride < 4u || table.record_stride > 256u ||
+            (table.record_stride & 3u) != 0u ||
+            table.callback_displacement < 0 ||
+            (table.callback_displacement & 3) != 0 ||
+            static_cast<std::uint64_t>(table.callback_displacement) + 4u >
+                table.record_stride)
+            continue;
+        const auto* const transfer = analysis.instruction_arena->find(
+            table.call_instruction_address);
+        if (transfer == nullptr ||
+            (transfer->instruction.kind != katana::sh4::InstructionKind::Jsr &&
+             transfer->instruction.kind != katana::sh4::InstructionKind::Jmp))
+            continue;
+        sinks.push_back({table.function_address,
+                         table.call_instruction_address,
+                         table.callback_load_instruction_address,
+                         table.callback_displacement,
+                         table.width,
+                         transfer->instruction.kind ==
+                             katana::sh4::InstructionKind::Jsr,
+                         0u});
+    }
+    if (sinks.empty()) return {};
+    const auto consumer_key = [](const auto& sink) {
+        return std::tie(sink.function_address, sink.call_instruction_address,
+                        sink.load_instruction_address, sink.displacement,
+                        sink.width, sink.call, sink.receiver_argument_mask);
+    };
+    std::sort(sinks.begin(), sinks.end(), [&](const auto& left, const auto& right) {
+        return consumer_key(left) < consumer_key(right);
+    });
+    sinks.erase(std::unique(sinks.begin(), sinks.end()), sinks.end());
 
     std::map<std::uint32_t, const katana::analysis::FunctionCandidate*>
         functions;
@@ -26285,6 +26368,71 @@ merge_latent_aot_external_callback_field_sinks(
     return merged;
 }
 
+std::vector<LatentAotExternalLiteralTransferCandidate>
+latent_aot_primary_literal_transfer_candidates(
+    const katana::io::ExecutableImage& image,
+    std::span<const katana::sh4::DisassemblyLine> instructions,
+    const std::span<const katana::ir::Function> program,
+    const std::uint32_t boot_address, const std::uint64_t boot_size,
+    const katana::analysis::ControlFlowAnalysisResult* const analysis = nullptr) {
+    std::vector<katana::sh4::DisassemblyLine> rehydrated;
+    if (instructions.empty() && !program.empty()) {
+        rehydrated = rehydrate_analyzed_instruction_slice(image, program);
+        instructions = rehydrated;
+    }
+    using Block = katana::analysis::detail::StaticExternalLiteralTransferBlock;
+    std::vector<Block> blocks;
+    const auto append_runs = [&](const auto& source, const auto address_of) {
+        Block run{};
+        for (const auto& instruction : source) {
+            const auto address = address_of(instruction);
+            if (run.byte_size != 0u &&
+                static_cast<std::uint64_t>(run.address) + run.byte_size != address) {
+                blocks.push_back(run);
+                run = {};
+            }
+            if (run.byte_size == 0u) run.address = address;
+            run.byte_size += 2u;
+        }
+        if (run.byte_size != 0u) blocks.push_back(run);
+    };
+    if (!program.empty()) {
+        for (const auto& function : program)
+            for (const auto& block : function.blocks)
+                append_runs(block.instructions,
+                    [](const auto& instruction) { return instruction.source_address; });
+    } else if (analysis != nullptr && analysis->instruction_arena &&
+               !analysis->block_spans.empty()) {
+        if (instructions.empty()) instructions = analysis->instruction_arena->instructions();
+        for (const auto& span : analysis->block_spans)
+            append_runs(span.view(*analysis->instruction_arena),
+                [](const auto& line) { return line.address; });
+    } else if (analysis != nullptr && !instructions.empty()) {
+        // Cold analysis defers IR lowering until the cross-image fixpoint.
+        // Reuse its source CFG and function boundaries, never a linear image
+        // sweep that could bridge an independently reachable block entry.
+        std::vector<std::uint32_t> leaders;
+        for (const auto& function : analysis->recursive.functions) {
+            leaders.push_back(function.address);
+            if (function.size != 0u && function.address <= UINT32_MAX - function.size)
+                leaders.push_back(function.address + function.size);
+        }
+        for (const auto& block : katana::analysis::build_basic_blocks(
+                 instructions, analysis->resolved_edges, leaders))
+            append_runs(block.lines, [](const auto& line) { return line.address; });
+    }
+    const auto candidates = katana::analysis::detail::
+        discover_external_literal_transfer_candidates(
+            image, instructions, blocks, boot_address, boot_size);
+    std::vector<LatentAotExternalLiteralTransferCandidate> result;
+    result.reserve(candidates.size());
+    for (const auto& candidate : candidates)
+        result.push_back({candidate.call_instruction_address,
+                          candidate.literal_address,
+                          candidate.target_address, candidate.call});
+    return result;
+}
+
 LatentAotDiscoveryOptions port_latent_aot_discovery_options(
     const PortExportOptions& options,
     const PortAnalysisMode analysis_mode,
@@ -26297,7 +26445,9 @@ LatentAotDiscoveryOptions port_latent_aot_discovery_options(
     const std::span<const LatentAotExternalCallbackFieldSink>
         external_callback_field_sinks,
     const std::span<const LatentAotExternalCallbackRecordTable>
-        external_callback_record_tables) {
+        external_callback_record_tables,
+    const std::span<const LatentAotExternalLiteralTransferCandidate>
+        external_literal_transfer_candidates) {
     LatentAotDiscoveryOptions result;
     result.mode = options.latent_aot_discovery_mode;
     // Full product export owns an occupied-range inventory for every primary
@@ -26345,6 +26495,8 @@ LatentAotDiscoveryOptions port_latent_aot_discovery_options(
     result.external_callback_field_sinks = external_callback_field_sinks;
     result.external_callback_record_tables =
         external_callback_record_tables;
+    result.external_literal_transfer_candidates =
+        external_literal_transfer_candidates;
     return result;
 }
 
@@ -33281,6 +33433,12 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
             prepared.image,
             declared_external_targets,
             &callback_field_sinks);
+    // Coverage can add resident callsites after the proof analysis. Derive
+    // candidates from the final coverage IR, rebound to current source bytes.
+    const auto literal_transfer_candidates =
+        latent_aot_primary_literal_transfer_candidates(
+            prepared.image, {}, coverage_primary_program,
+            prepared.boot_address, prepared.boot_size);
     auto discovery_options = port_latent_aot_discovery_options(
         options,
         PortAnalysisMode::PlatformAbi,
@@ -33289,7 +33447,8 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
         callback_sinks,
         {},
         callback_field_sinks,
-        {});
+        {},
+        literal_transfer_candidates);
     discovery_options.mode = LatentAotDiscoveryMode::ExactOnly;
     discovery_options.completeness_policy =
         LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
@@ -35590,6 +35749,11 @@ prepare_dreamcast_port_project_impl(
                 prepared.image,
                 declared_external_targets,
                 &declared_external_callback_field_sinks);
+        const auto literal_transfer_candidates =
+            latent_aot_primary_literal_transfer_candidates(
+                prepared.image, prepared.analysis.recursive.instructions,
+                prepared.program, prepared.boot_address, prepared.boot_size,
+                &prepared.analysis);
         const auto discovery_options =
             port_latent_aot_discovery_options(
                 options, PortAnalysisMode::PlatformAbi,
@@ -35598,7 +35762,8 @@ prepare_dreamcast_port_project_impl(
                 declared_external_callback_sinks,
                 {},
                 declared_external_callback_field_sinks,
-                {});
+                {},
+                literal_transfer_candidates);
         report_progress(
             options,
             "latent-aot-external-callback-sinks:" +
@@ -44450,14 +44615,14 @@ NativeDiscAnalysisResult analyze_native_disc_port(
     for (std::size_t iteration = 0u;
          iteration < maximum_cross_image_callback_iterations;
          ++iteration) {
-        // A final-CFA field sink is an authenticated primary-image consumer,
+        // A final-CFA callback sink is an authenticated primary-image consumer,
         // even when no latent module calls the consumer directly. Admit only
         // bounded, executable final-CFA owners whose complete load/call set
         // was revalidated against the same immutable analysis generation.
         // The fallback inventory remains restricted to independently
         // declared targets.
         const auto field_sink_primary_targets =
-            latent_aot_materialized_callback_field_sink_primary_targets(
+            latent_aot_materialized_callback_consumer_primary_targets(
                 image, prepared_analysis.artifact.analysis);
         for (const auto target : field_sink_primary_targets) {
             const auto insertion = std::lower_bound(
@@ -44517,7 +44682,38 @@ NativeDiscAnalysisResult analyze_native_disc_port(
                 ":record-tables=" +
                 std::to_string(
                     analyzed_external_callback_record_tables.size()) +
+                ":materialized-record-tables=" +
+                std::to_string(prepared_analysis.artifact.analysis.
+                                   static_callback_record_tables.size()) +
+                ":materialized-static-vectors=" +
+                std::to_string(std::count_if(
+                    prepared_analysis.artifact.analysis.
+                        static_callback_record_tables.begin(),
+                    prepared_analysis.artifact.analysis.
+                        static_callback_record_tables.end(),
+                    [](const auto& table) {
+                        return table.source_kind == katana::analysis::
+                            CallbackRecordTableSource::StaticVectorAddress;
+                    })) +
+                ":accepted-static-vectors=" +
+                std::to_string(std::count_if(
+                    analyzed_external_callback_record_tables.begin(),
+                    analyzed_external_callback_record_tables.end(),
+                    [](const auto& table) {
+                        return table.source_kind == katana::analysis::
+                            CallbackRecordTableSource::StaticVectorAddress;
+                    })) +
                 ":iteration=" + std::to_string(iteration) + "-complete");
+        const auto literal_transfer_candidates =
+            latent_aot_primary_literal_transfer_candidates(
+                image, prepared_analysis.artifact.analysis.recursive.instructions,
+                prepared_analysis.artifact.lowered_program,
+                katana::platform::dreamcast_disc_boot_address,
+                disc.boot_file.size(), &prepared_analysis.artifact.analysis);
+        report_progress(options,
+            "latent-aot-primary-literal-transfers:" +
+                std::to_string(literal_transfer_candidates.size()) +
+                ":iteration=" + std::to_string(iteration));
         const auto discovery_options = port_latent_aot_discovery_options(
             options,
             analysis_mode,
@@ -44526,7 +44722,8 @@ NativeDiscAnalysisResult analyze_native_disc_port(
             external_callback_sinks,
             analyzed_external_persistent_pointer_sinks,
             external_callback_field_sinks,
-            analyzed_external_callback_record_tables);
+            analyzed_external_callback_record_tables,
+            literal_transfer_candidates);
         report_progress(
             options,
             "latent-aot-discovery-fixpoint:" +

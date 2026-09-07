@@ -12,6 +12,45 @@ namespace katana::analysis::detail {
 
 class GuardedNativeEntryShapeCache;
 
+struct StaticExternalLiteralTransferCandidate final {
+    std::uint32_t call_instruction_address = 0u;
+    std::uint32_t literal_address = 0u;
+    std::uint32_t target_address = 0u;
+    bool call = false;
+
+    bool operator==(const StaticExternalLiteralTransferCandidate&) const = default;
+};
+
+struct StaticExternalLiteralTransferBlock final {
+    std::uint32_t address = 0u;
+    std::uint32_t byte_size = 0u;
+};
+
+// Positive source-bound inventory from decoded resident instructions. The
+// literal must feed the branch register before its delay slot on one bounded,
+// contiguous path. No runtime target set, executable owner or ABI is proven.
+[[nodiscard]] std::vector<StaticExternalLiteralTransferCandidate>
+discover_external_literal_transfer_candidates(
+    const katana::io::ExecutableImage& image,
+    std::span<const katana::sh4::DisassemblyLine> lines,
+    std::span<const StaticExternalLiteralTransferBlock> blocks,
+    std::uint32_t primary_begin, std::uint64_t primary_size);
+
+struct StaticCodePointerVectorInventory final {
+    std::vector<StoredCodeAddressCandidate> candidates;
+    bool truncated = false;
+};
+
+// Reuses the ordinary four-entry / repeated ordered-pair vector classifier.
+// Anchors name immutable carrier references in this exact image view; they
+// restrict the search but never establish callback semantics by themselves.
+[[nodiscard]] StaticCodePointerVectorInventory
+discover_anchored_static_code_pointer_vectors(
+    const katana::io::ExecutableImage& image,
+    const katana::io::ImageSegment& active_source,
+    std::span<const std::uint32_t> anchors,
+    GuardedNativeEntryShapeCache& native_entry_shapes);
+
 using StaticCallbackSinkContract =
     katana::analysis::StaticCallbackSinkContract;
 using StaticPersistentPointerSinkContract =

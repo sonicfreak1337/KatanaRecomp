@@ -126,8 +126,84 @@ template <typename Function> std::string failure(Function&& function) {
 
 } // namespace
 
-int main() {
+int main(const int argc, const char* const argv[]) {
     using namespace katana::runtime;
+
+    // Sonic remote bring-up: optional keyboard and physical P1 remain live
+    // together, and releasing arrows immediately restores the physical stick.
+    const auto test_keyboard_controls = [] {
+        const auto a = native_port_gamepad_button_mask(NativePortGamepadButton::A);
+        const auto b = native_port_gamepad_button_mask(NativePortGamepadButton::B);
+        const auto x = native_port_gamepad_button_mask(NativePortGamepadButton::X);
+        NativePortGamepadState pad;
+        pad.connected = true;
+        pad.buttons = x;
+        pad.left_stick_x_raw = -16'000;
+        pad.left_stick_y_raw = 8'000;
+        pad.left_stick_x = -0.5f;
+        pad.left_stick_y = 0.25f;
+        pad.right_stick_x_raw = 12'000;
+        pad.right_stick_x = 0.4f;
+        pad.left_trigger_raw = 255u;
+        pad.left_trigger = 1.0f;
+        auto merged = pad;
+        const auto off = detail::keyboard_direction_state(
+            false, false, true, false, false, true, true);
+        detail::merge_keyboard_gamepad(merged, off);
+        require(merged.left_stick_x_raw == pad.left_stick_x_raw &&
+                    merged.left_stick_y == pad.left_stick_y &&
+                    (merged.buttons & (a | b)) == 0u &&
+                    (merged.buttons & native_port_gamepad_button_mask(
+                        NativePortGamepadButton::DpadRight)) != 0u,
+                "Keyboard aus veraendert den Stick oder aktiviert Space/B.");
+        merged = pad;
+        const auto active = detail::keyboard_direction_state(
+            true, false, true, true, false, true, true);
+        detail::merge_keyboard_gamepad(merged, active);
+        const auto length_squared = merged.left_stick_x * merged.left_stick_x +
+                                    merged.left_stick_y * merged.left_stick_y;
+        require(merged.buttons == (a | b | x) &&
+                    merged.left_stick_x > 0.7f && merged.left_stick_y > 0.7f &&
+                    length_squared <= 1.0001f && length_squared >= 0.9999f &&
+                    merged.right_stick_x_raw == pad.right_stick_x_raw &&
+                    merged.right_stick_x == pad.right_stick_x &&
+                    merged.left_trigger_raw == pad.left_trigger_raw &&
+                    merged.left_trigger == pad.left_trigger,
+                "Keyboard/Controller-Mix verliert Buttons, normiert falsch oder aendert andere Achsen.");
+        merged = pad;
+        detail::merge_keyboard_gamepad(merged, detail::keyboard_direction_state(
+            true, true, true, false, false, false, false));
+        require(merged.left_stick_x_raw == 0 && merged.left_stick_y_raw == 0 &&
+                    merged.buttons == x,
+                "Gegenlaeufige Pfeiltasten heben sich nicht auf.");
+        merged = pad;
+        detail::merge_keyboard_gamepad(merged, detail::keyboard_direction_state(
+            true, false, false, false, false, false, false));
+        require(merged.buttons == pad.buttons &&
+                    merged.left_stick_x_raw == pad.left_stick_x_raw &&
+                    merged.left_stick_y_raw == pad.left_stick_y_raw &&
+                    merged.left_stick_x == pad.left_stick_x &&
+                    merged.left_stick_y == pad.left_stick_y,
+                "Losgelassene Tastatur blockiert den Controllerstick.");
+        merged = pad;
+        detail::NativeKeyboardGamepadState unfocused;
+        unfocused.state.connected = true;
+        detail::merge_keyboard_gamepad(merged, unfocused);
+        require(merged.buttons == pad.buttons &&
+                    merged.left_stick_x_raw == pad.left_stick_x_raw &&
+                    merged.left_stick_y_raw == pad.left_stick_y_raw,
+                "Fokusverlust laesst Keyboard-Eingaben haengen.");
+        NativePortGamepadState keyboard_only;
+        detail::merge_keyboard_gamepad(keyboard_only, active);
+        require(keyboard_only.connected && keyboard_only.buttons == (a | b) &&
+                    keyboard_only.left_stick_y > 0.7f,
+                "Keyboard-P1 funktioniert ohne Controller nicht.");
+    };
+    test_keyboard_controls();
+    if (argc == 2 && std::string_view(argv[1]) == "--p1-keyboard-controls") {
+        std::cout << "Sonic P1 keyboard/controller controls passed (6 cases).\n";
+        return 0;
+    }
 
     // One physical Cross/A press must remain one rising title edge when a
     // proven Sony endpoint hands off to its XInput compatibility endpoint.

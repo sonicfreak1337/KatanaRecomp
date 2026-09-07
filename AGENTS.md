@@ -453,6 +453,14 @@ Task implementieren
   nur auf ausdrueckliche Anforderung. Redundante Replays, die denselben
   frueheren Checkpoint nur langsamer erreichen, gehoeren nicht in den
   Standardgurt.
+- Sonic-Produktexporte werden ausschliesslich mit Host-Buildprofil
+  `performance` gebaut. `bringup` und `gate` sind dafuer nicht zulaessig;
+  der NativeBringup-Ausfuehrungsvertrag ist davon unabhaengig und bleibt
+  bestehen. Der kanonische Export-Wrapper weist andere Hostprofile ab.
+- Der kanonische Sonic-Export behaelt die bisherige `heuristic`-Modulerkennung.
+  Ein Wechsel zu `exact-only` ist kein Performancefix und darf vorhandene
+  ungesaete Module nicht aus dem Produkt entfernen. Die vorigen und neuen
+  Exportparameter sowie Modulidentitaeten werden vor Abnahme verglichen.
 - Jeder vollstaendige Export ueber zehn Minuten ist P0. Der gesamte echte
   Kaltexport muss unter zehn Minuten fallen, einschliesslich Authoring,
   Analyse, AOT-Codegen, Compile, finalem Link und Packaging. Kalt bedeutet
