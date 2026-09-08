@@ -2420,6 +2420,40 @@ class NativePortGraphicsBackend final {
         return completed_frame_available_ && !frame_open_;
     }
 
+    [[nodiscard]] bool completed_image_available() const noexcept {
+        return completed_frame_available_;
+    }
+
+    // Only the autonomous render-owner deadline may suspend an open frame.
+    // The public repeat command still requires a closed frame. Keep the last
+    // completed texture immutable and never resolve or publish the work here.
+    NativePortBackendPresentOutcome present_completed_image_on_deadline(
+        const char* const operation) {
+        if (!frame_open_) return repeat_present(operation);
+        require_owner_thread();
+        if (!completed_frame_available_)
+            fail(NativePortGraphicsFailure::InvalidFrame, 0u,
+                 "repeat-without-completed-frame");
+        try {
+            end_gpu_timing_frame();
+            stop_render_submit_telemetry();
+            unbind_type2_subpass();
+            start_render_submit_telemetry();
+            begin_gpu_timing_frame();
+            const auto outcome = present_completed_frame(operation);
+            restore_working_frame_attachments();
+            // Composite/overlay/resize changed the pipeline. The next draw
+            // restores its own viewport, shaders, textures and fixed state.
+            invalidate_draw_state_shadow();
+            start_render_submit_telemetry();
+            begin_gpu_timing_frame();
+            return outcome;
+        } catch (...) {
+            abort_frame_after_command_failure();
+            throw;
+        }
+    }
+
     // A batched parallel frame is atomic at the facade boundary. Once one
     // backend command fails, no later command from that frame may run and the
     // partially rendered surface must never become repeat-presentable. This
@@ -2784,6 +2818,26 @@ class NativePortGraphicsBackend final {
         type_two_uavs_bound_ = false;
     }
 
+    void restore_working_frame_attachments() {
+        if (type2_subpass_active_) {
+            // Rebind the existing gather, including its live node counters.
+            // begin_type2_subpass() would clear the list and copy a new base.
+            std::array<ID3D11UnorderedAccessView*, 4u> unordered_views{
+                type_two_head_uav_.Get(), type_two_fragment_uav_.Get(),
+                type_two_count_uav_.Get(), type_two_status_uav_.Get()};
+            context_->OMSetRenderTargetsAndUnorderedAccessViews(
+                0u, nullptr, depth_view_.Get(), 1u,
+                static_cast<UINT>(unordered_views.size()),
+                unordered_views.data(), nullptr);
+            context_->PSSetShaderResources(
+                5u, 1u, type_two_depth_view_.GetAddressOf());
+            type_two_uavs_bound_ = true;
+        } else {
+            context_->OMSetRenderTargets(
+                1u, render_target_.GetAddressOf(), depth_view_.Get());
+        }
+    }
+
     void resolve_type2_subpass() {
         if (!type2_resources_ready_ || !type2_gather_active_)
             fail(NativePortGraphicsFailure::InvalidFrame,
@@ -3102,6 +3156,9 @@ class NativePortGraphicsBackend final {
     NativePortBackendPresentOutcome present_completed_frame(
         const char* const operation) {
         poll_events();
+        // Resize may have restored an open gather while polling events.
+        // Composite output must have no working-frame UAVs bound.
+        if (frame_open_) unbind_type2_subpass();
         update_runtime_options_menu();
         if (minimized_) {
             end_gpu_timing_frame();
@@ -4481,6 +4538,7 @@ class NativePortGraphicsBackend final {
             fail(NativePortGraphicsFailure::ResourceLimit,
                  0u,
                  "swap-chain-resize-extent");
+        unbind_type2_subpass();
         ID3D11ShaderResourceView* no_view = nullptr;
         context_->PSSetShaderResources(0u, 1u, &no_view);
         context_->OMSetRenderTargets(0u, nullptr, nullptr);
@@ -4504,8 +4562,7 @@ class NativePortGraphicsBackend final {
         // targets to be unbound, so restore the unchanged native render
         // surface when that frame is still open.
         if (frame_open_)
-            context_->OMSetRenderTargets(
-                1u, render_target_.GetAddressOf(), depth_view_.Get());
+            restore_working_frame_attachments();
         saturating_increment(snapshot_.swap_chain_resizes);
     }
 
@@ -6909,6 +6966,11 @@ class NativePortGraphicsBackend final {
     void present() {}
     void complete_frame() {}
     [[nodiscard]] bool completed_frame_ready() const noexcept { return false; }
+    [[nodiscard]] bool completed_image_available() const noexcept { return false; }
+    NativePortBackendPresentOutcome present_completed_image_on_deadline(
+        const char* = "repeat-present") {
+        return NativePortBackendPresentOutcome::Presented;
+    }
     void abort_frame_after_command_failure() noexcept {}
     void publish_telemetry() noexcept {}
     NativePortBackendPresentOutcome repeat_present(
@@ -7927,15 +7989,14 @@ class NativePortGraphicsDevice::Impl final {
             now = presentation_now();
         }
         if (now < consumer_presentation_deadline_) return;
-        if (!backend.completed_frame_ready()) {
-            // An open resource prefix may own Type-2 UAVs and an unfinished
-            // GPU query. Never flush or composite that partial title frame.
+        if (!backend.completed_image_available()) {
+            // There is no output authority before the first complete image.
             saturating_atomic_add(published_missed_presentations_);
             advance_presentation_deadline(now);
             return;
         }
         const auto before = backend.snapshot().presented_frames;
-        const auto outcome = backend.repeat_present(operation);
+        const auto outcome = backend.present_completed_image_on_deadline(operation);
         const auto after = backend.snapshot().presented_frames;
         if (outcome == NativePortBackendPresentOutcome::Deferred) {
             // The completed image remains authoritative and will be retried
@@ -7953,6 +8014,16 @@ class NativePortGraphicsDevice::Impl final {
         advance_presentation_deadline(presentation_now());
     }
 
+    [[nodiscard]] bool autonomous_presentation_active(
+        const NativePortGraphicsBackend& backend) const noexcept {
+        return backend.lifecycle_state() == NativePortLifecycleState::Running &&
+            independent_presentation_enabled() &&
+            !presentation_shutdown_.load(std::memory_order_acquire) &&
+            !presentation_paused_.load(std::memory_order_acquire) &&
+            !consumer_presentation_faulted_ &&
+            queue_->snapshot().lifecycle == NativePortFrameQueueLifecycle::Running;
+    }
+
     [[nodiscard]] bool service_idle_presentation(
         NativePortGraphicsBackend& backend) noexcept {
         if (backend.lifecycle_state() != NativePortLifecycleState::Running) {
@@ -7962,16 +8033,11 @@ class NativePortGraphicsDevice::Impl final {
             consumer_presentation_remainder_ = 0u;
             return true;
         }
-        if (!independent_presentation_enabled() ||
-            presentation_shutdown_.load(std::memory_order_acquire) ||
-            presentation_paused_.load(std::memory_order_acquire) ||
-            consumer_presentation_faulted_ ||
-            queue_->snapshot().lifecycle != NativePortFrameQueueLifecycle::Running)
-            return true;
-        // No output epoch before the first completed image. Once running,
-        // blocked prefix deadlines are still accounted without busy waiting.
+        if (!autonomous_presentation_active(backend)) return true;
+        // No output epoch before the first completed image. A later prefix
+        // retains that immutable image while its own working list is open.
         if (consumer_presentation_deadline_ == 0u &&
-            !backend.completed_frame_ready()) return true;
+            !backend.completed_image_available()) return true;
         try {
             present_on_consumer_deadline(backend, false);
             return true;
@@ -8025,6 +8091,15 @@ class NativePortGraphicsDevice::Impl final {
             const auto ordinal = command->ordinal;
             try {
                 shutdown = execute_command(backend, *command) || shutdown;
+                // Long draw leases must not monopolize the immediate context
+                // for several output periods. Bound clock/atomic checks to
+                // one per 16 commands and keep any failure inside this lease's
+                // normal atomic abort/skip-rest-of-frame handling.
+                if (command->kind == NativePortGraphicsCommandKind::Draw &&
+                    (ordinal & 15u) == 15u &&
+                    autonomous_presentation_active(backend) &&
+                    backend.completed_image_available())
+                    present_on_consumer_deadline(backend, false);
                 saturating_atomic_add(executed_commands_);
                 last_executed_sequence_.store(sequence,
                                               std::memory_order_release);

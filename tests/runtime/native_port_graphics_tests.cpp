@@ -1182,12 +1182,14 @@ void require_runtime_options_menu(
     prefix_texture_config.dynamic = true;
     const auto prefix_texture = host.graphics().create_texture(prefix_texture_config);
     const auto prefix_before = host.frame_pacing_snapshot();
+    const auto prefix_draws = host.graphics().completed_drawn_frames_nonblocking();
     std::this_thread::sleep_for(std::chrono::milliseconds(60));
     const auto prefix_after = host.frame_pacing_snapshot();
-    require(prefix_after.presentation_frames == prefix_before.presentation_frames &&
-                prefix_after.missed_presentation_deadlines >
-                    prefix_before.missed_presentation_deadlines,
-            "Ein offener Ressourcenpraefix wurde als komplettes Bild ausgegeben.");
+    require(prefix_after.presentation_frames > prefix_before.presentation_frames &&
+                prefix_after.repeated_presentations > prefix_before.repeated_presentations &&
+                prefix_after.simulation_frames == prefix_before.simulation_frames &&
+                host.graphics().completed_drawn_frames_nonblocking() == prefix_draws,
+            "Ein offener Praefix stoppte die Ausgabe oder wurde als fertig gezaehlt.");
     host.present_frame(1u);
     host.graphics().destroy_texture(prefix_texture);
     host.graphics().finish();
@@ -1195,6 +1197,88 @@ void require_runtime_options_menu(
     std::this_thread::sleep_for(std::chrono::milliseconds(35));
     require(host.frame_pacing_snapshot().presentation_frames > finished.presentation_frames,
             "Der fuer Sonic-Quicksaves verwendete Drain stoppte die Ausgabeeuhr dauerhaft.");
+}
+
+void run_open_type2_repeat_capture(
+    const katana::runtime::NativePortGraphicsConfig& source_config) {
+    using namespace katana::runtime;
+    if (const auto* serial = std::getenv("KATANA_PORT_DISABLE_RENDER_THREAD");
+        serial != nullptr && std::string_view(serial) == "1") return;
+    const auto directory = std::filesystem::temp_directory_path() /
+        ("katana-open-type2-repeat-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    {
+        ScopedEnvironmentOverride capture_directory(
+            "KATANA_NATIVE_GRAPHICS_CAPTURE_DIRECTORY", directory.string());
+        ScopedEnvironmentOverride capture_start("KATANA_NATIVE_GRAPHICS_CAPTURE_START_FRAME", "1");
+        ScopedEnvironmentOverride capture_end("KATANA_NATIVE_GRAPHICS_CAPTURE_END_FRAME", "64");
+        ScopedEnvironmentOverride capture_interval("KATANA_NATIVE_GRAPHICS_CAPTURE_INTERVAL", "1");
+        auto config = source_config;
+        config.title = "Katana Open Type2 Repeat Capture";
+        config.telemetry = nullptr;
+        NativePortFramePacingConfig pacing;
+        pacing.simulation_rate_hz = 30u;
+        pacing.presentation_rate_hz = 144u;
+        pacing.maximum_presentation_rate_hz = 144u;
+        NativePortDesktopHost host(config, pacing);
+        auto frame = reciprocal_frame();
+        frame.clear_color = {0.0f, 0.0f, 1.0f, 1.0f};
+        host.graphics().begin_frame(frame);
+        host.present_frame(0u);
+        host.graphics().finish();
+
+        host.graphics().begin_frame(reciprocal_frame());
+        auto red = type_two_pixel_triangle(32.5f, 32.5f);
+        for (auto& vertex : red) vertex.color = {1.0f, 0.0f, 0.0f, 0.5f};
+        host.graphics().draw(type_two_packet(red, 0x7711u, 1u));
+        NativePortTextureConfig texture_config;
+        texture_config.extent = {1u, 1u};
+        const auto texture = host.graphics().create_texture(texture_config);
+        const auto before = host.frame_pacing_snapshot();
+        const auto drawn_before = host.graphics().completed_drawn_frames_nonblocking();
+        const auto window = FindWindowW(nullptr, L"Katana Open Type2 Repeat Capture");
+        require(window != nullptr && PostMessageW(window, WM_SIZE, SIZE_RESTORED,
+                    MAKELPARAM(80u, 72u)), "Open Type2 resize could not be queued.");
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+        const auto after = host.frame_pacing_snapshot();
+        require(after.presentation_frames > before.presentation_frames &&
+                    after.simulation_frames == before.simulation_frames &&
+                    host.graphics().completed_drawn_frames_nonblocking() == drawn_before,
+                "Open Type2 output changed game/draw progress or stalled.");
+        const auto layout = host.graphics().layout();
+        require(layout.output_extent.width == 80u && layout.output_extent.height == 72u,
+                "Open Type2 resize did not reach the owner.");
+        auto green = red;
+        for (auto& vertex : green) vertex.color = {0.0f, 1.0f, 0.0f, 0.5f};
+        host.graphics().draw(type_two_packet(green, 0x7711u, 2u));
+        host.present_frame(1u);
+        host.graphics().destroy_texture(texture);
+        host.graphics().finish();
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+    std::size_t retained_blue = 0u;
+    std::size_t resumed_composite = 0u;
+    for (const auto& file : std::filesystem::directory_iterator(directory)) {
+        if (file.path().extension() != ".bmp") continue;
+        std::ifstream input(file.path(), std::ios::binary);
+        const std::vector<unsigned char> bytes{
+            std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+        const auto pixel = 54u + ((63u - 32u) * 64u + 32u) * 4u;
+        require(bytes.size() >= pixel + 4u, "Open Type2 capture was truncated.");
+        const auto b = bytes[pixel], g = bytes[pixel + 1u], r = bytes[pixel + 2u];
+        if (b >= 0xF0u && g <= 0x10u && r <= 0x10u) ++retained_blue;
+        else {
+            require(b <= 0x10u && g >= 0x78u && g <= 0x88u &&
+                        r >= 0x38u && r <= 0x48u,
+                    "Open Type2 repeat/resize lost a node, base, blend or resumed draw.");
+            ++resumed_composite;
+        }
+    }
+    require(retained_blue >= 2u && resumed_composite != 0u,
+            "GPU capture did not prove retained-image repeat and resumed Type2.");
+    std::error_code cleanup;
+    std::filesystem::remove_all(directory, cleanup);
+    require(!cleanup, "Open Type2 capture cleanup failed.");
 }
 
 #endif
@@ -1598,6 +1682,7 @@ int main(const int argc, char** const argv) try {
     // This GPU/readback regression deliberately precedes the Parallel-only
     // facade branch below so both CTest modes execute the same Type-2 proof.
     run_type_two_global_fragment_capture(config);
+    run_open_type2_repeat_capture(config);
     run_accumulation_and_clip_capture(config);
     run_flycast_material_capture(config);
     run_flat_vertex_fog_capture(config);
