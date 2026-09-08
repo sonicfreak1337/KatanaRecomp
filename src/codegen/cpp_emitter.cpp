@@ -5335,12 +5335,28 @@ bool can_batch_instruction_accounting(
            pure_timing && !timing.requires_cycle_flush;
 }
 
+bool is_fpu_epoch_register_transfer(
+    const katana::ir::Instruction& instruction) noexcept {
+    using Operation = katana::ir::Operation;
+    return instruction.operation == Operation::FmovRegister ||
+           instruction.operation == Operation::Fabs ||
+           instruction.operation == Operation::Fneg ||
+           instruction.operation == Operation::Fldi0 ||
+           instruction.operation == Operation::Fldi1;
+}
+
 std::uint8_t host_fpu_execution_epoch_mode_mask(
     const katana::ir::Instruction& instruction) noexcept {
     using Operation = katana::ir::Operation;
 
     constexpr std::uint8_t valid_pr_zero = 1u;
     constexpr std::uint8_t valid_pr_one = 2u;
+    if (is_fpu_epoch_register_transfer(instruction)) {
+        // Keep transfer/sign operations in a register-only single-precision
+        // epoch. The epoch predicate, not the first opcode's own guard,
+        // explicitly proves PR=0 and a valid rounding mode for later math.
+        return valid_pr_zero;
+    }
     switch (instruction.operation) {
     case Operation::Fadd:
     case Operation::Fsub:
@@ -5406,15 +5422,14 @@ void emit_non_faulting_simple_instruction(std::ostringstream& output,
     output << "}\n";
 }
 
-void emit_non_faulting_fpu_epoch_instruction(
+void emit_fpu_epoch_final_instruction_metadata(
     std::ostringstream& output,
     const katana::ir::Instruction& instruction,
-    const int indent,
-    const NativeRegisterEmission& registers) {
+    const int indent) {
     emit_indent(output, indent);
     output << "{\n";
     emit_indent(output, indent + 1);
-    output << "// katana-guest " << hex32(instruction.source_address) << "\n";
+    output << "// FPU epoch final instruction metadata\n";
     emit_indent(output, indent + 1);
     output << "cpu.active_instruction_pc = "
            << relocated_code_address(instruction.source_address) << ";\n";
@@ -5433,7 +5448,6 @@ void emit_non_faulting_fpu_epoch_instruction(
     output << ": katana::runtime::canonical_physical_address_inline(\n";
     emit_indent(output, indent + 3);
     output << "cpu.active_instruction_pc);\n";
-    emit_simple_instruction(output, instruction, indent + 1, registers);
     emit_indent(output, indent);
     output << "}\n";
 }
@@ -5630,8 +5644,10 @@ void emit_block(std::ostringstream& output,
         const auto timing = katana::sh4::instruction_timing(instruction.original_opcode);
         if (can_share_host_fpu_execution_epoch(
                 instruction, timing, external_instruction_observer)) {
-            const auto epoch_mode_mask =
+            auto epoch_mode_mask =
                 host_fpu_execution_epoch_mode_mask(instruction);
+            bool epoch_uses_host_environment =
+                !is_fpu_epoch_register_transfer(instruction);
             std::size_t epoch_end = index + 1u;
             while (epoch_end < block.instructions.size()) {
                 const auto& candidate = block.instructions[epoch_end];
@@ -5648,10 +5664,12 @@ void emit_block(std::ostringstream& output,
                         candidate,
                         candidate_timing,
                         external_instruction_observer) ||
-                    host_fpu_execution_epoch_mode_mask(candidate) !=
-                        epoch_mode_mask) {
+                    (host_fpu_execution_epoch_mode_mask(candidate) &
+                        epoch_mode_mask) == 0u) {
                     break;
                 }
+                epoch_mode_mask &= host_fpu_execution_epoch_mode_mask(candidate);
+                epoch_uses_host_environment |= !is_fpu_epoch_register_transfer(candidate);
                 ++epoch_end;
             }
 
@@ -5661,14 +5679,26 @@ void emit_block(std::ostringstream& output,
                 output << "if ((cpu.fpscr & (katana::runtime::"
                           "fpscr_exception_enable_mask | "
                           "katana::runtime::fpscr_dn_mask)) == "
-                          "katana::runtime::fpscr_dn_mask) {\n";
+                          "katana::runtime::fpscr_dn_mask &&\n";
                 emit_indent(output, 5);
-                output << "katana::runtime::HostFpuExecutionEpoch "
-                          "katana_host_fpu_epoch(cpu);\n";
+                output << "(cpu.fpscr & katana::runtime::fpscr_rounding_mode_mask) <= 1u";
+                if (epoch_mode_mask != 3u) {
+                    output << " &&\n";
+                    emit_indent(output, 5);
+                    output << "(cpu.fpscr & katana::runtime::fpscr_pr_mask) "
+                           << (epoch_mode_mask == 1u ? "==" : "!=") << " 0u";
+                }
+                output << ") {\n";
+                if (epoch_uses_host_environment) {
+                    emit_indent(output, 5);
+                    output << "katana::runtime::HostFpuExecutionEpoch "
+                              "katana_host_fpu_epoch(cpu);\n";
+                }
                 // The first instruction retains the complete architectural
-                // attempt and both FPU guards. Every following instruction
-                // has the identical FPSCR validity predicate. The runtime
-                // predicate above additionally proves that all maskable FPU
+                // attempt and both FPU guards. The shared PR/RM predicate
+                // proves validity for every following instruction, even if
+                // the first is only a register transfer. It also proves all
+                // maskable FPU
                 // traps are disabled and DN=1 excludes the unmaskable
                 // denormal-input FPU error, so the remaining operations can
                 // share one accounting region without hiding a fault edge.
@@ -5689,13 +5719,21 @@ void emit_block(std::ostringstream& output,
                      ++epoch_index) {
                     const auto& epoch_instruction =
                         block.instructions[epoch_index];
-                    emit_non_faulting_fpu_epoch_instruction(
+                    emit_non_faulting_simple_instruction(
                         output, epoch_instruction, 5, registers);
                     region_guest_cycles +=
                         katana::sh4::instruction_timing(
                             epoch_instruction.original_opcode)
                             .guest_cycles;
                 }
+                // No observer, memory access, control edge or enabled FPU
+                // trap can observe the interior of this region. None of its
+                // operations changes the address mappings or FPU validity
+                // predicate. Publish the exact final PC once, before the
+                // ordinary accounting/boundary work resumes. Keep the first
+                // guarded instruction and every trapping fallback unchanged.
+                emit_fpu_epoch_final_instruction_metadata(
+                    output, block.instructions[epoch_end - 1u], 5);
                 emit_instruction_accounting_region(
                     output,
                     5,

@@ -10,9 +10,17 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+namespace katana_fpu_boundary_reference {
+std::vector<std::uint32_t> observed_entries;
+void note_instruction_entry(const std::uint32_t address, const bool) noexcept {
+    observed_entries.push_back(address);
+}
+} // namespace katana_fpu_boundary_reference
 
 namespace {
 
@@ -145,6 +153,88 @@ class GeneratedFpuServices final : public katana::runtime::PlatformServices {
 
 int main() {
     using katana::runtime::read_dr_double;
+
+    // The observer-emitted reference retains every architectural attempt. This
+    // exercises a Sonic-like arithmetic run under normal, masked, trapping and
+    // invalid modes, including a newer mapping overlapping its final opcodes.
+    for (const auto entry : {0x190u, 0x19Cu})
+    for (unsigned mapping_case = 0u; mapping_case != 3u; ++mapping_case) {
+        const auto byte_size = entry == 0x190u ? 12u : 20u;
+        const auto final_pc = entry + byte_size - 2u;
+        std::optional<katana::runtime::ScopedCodeAddressMapping> outer;
+        std::optional<katana::runtime::ScopedCodeAddressMapping> inner;
+        if (mapping_case != 0u) outer.emplace(
+            katana::runtime::CodeAddressMapping{0x190u, 0x8C010190u, 0x40u});
+        if (mapping_case == 2u) inner.emplace(
+            katana::runtime::CodeAddressMapping{final_pc - 2u,
+                0xAC020000u + final_pc - 2u, 4u});
+        constexpr std::array<std::uint32_t, 9> modes = {
+            katana::runtime::fpscr_dn_mask,
+            katana::runtime::fpscr_dn_mask | 1u,
+            katana::runtime::fpscr_dn_mask | 2u,
+            katana::runtime::fpscr_dn_mask | 3u,
+            0u,
+            katana::runtime::fpscr_dn_mask | katana::runtime::fpscr_exception_enable_mask,
+            katana::runtime::fpscr_dn_mask | katana::runtime::fpscr_pr_mask,
+            katana::runtime::fpscr_dn_mask | katana::runtime::fpscr_sz_mask,
+            katana::runtime::fpscr_dn_mask | katana::runtime::fpscr_pr_mask |
+                katana::runtime::fpscr_sz_mask};
+        constexpr std::array<std::uint32_t, 6> inputs = {
+            0x3FC00000u, 0u, 1u, 0x7F800000u, 0x7FBFFFFFu, 0x7F7FFFFFu};
+        for (const auto mode : modes) for (const auto input : inputs)
+        for (const bool disabled : {false, true}) {
+            auto optimized = std::make_unique<katana_generated::CpuState>();
+            auto reference = std::make_unique<katana_generated::CpuState>();
+            for (auto* cpu : {optimized.get(), reference.get()}) {
+                cpu->write_sr(disabled ? katana::runtime::sr_fd_mask : 0u);
+                cpu->fpscr = mode;
+                cpu->pc = katana::runtime::relocate_code_address(entry);
+                cpu->vbr = 0x8000u;
+                cpu->fr[0] = 0x3F800000u;
+                cpu->fr[1] = 0x40000000u;
+                cpu->fr[2] = 0x40000000u;
+                cpu->fr[3] = input;
+                cpu->fr[4] = 0x3F000000u;
+                cpu->fr[5] = 0x3F800000u;
+                cpu->fr[6] = 0x3F000000u;
+                cpu->active_block_virtual_start = cpu->pc;
+                cpu->active_block_physical_start =
+                    katana::runtime::canonical_physical_address_inline(cpu->pc);
+                cpu->active_block_size = byte_size;
+            }
+            katana_fpu_boundary_reference::observed_entries.clear();
+            if (entry == 0x190u) {
+                katana_generated::fn_00000190(*optimized);
+                katana_fpu_boundary_reference::fn_00000190(*reference);
+            } else {
+                katana_generated::fn_0000019C(*optimized);
+                katana_fpu_boundary_reference::fn_0000019C(*reference);
+            }
+            const auto& a = *optimized;
+            const auto& b = *reference;
+            require(a.fr == b.fr && a.fpscr == b.fpscr && a.sr == b.sr &&
+                        a.pc == b.pc && a.spc == b.spc && a.expevt == b.expevt &&
+                        a.trap_pending == b.trap_pending &&
+                        a.exception_generation == b.exception_generation &&
+                        a.last_exception_cause == b.last_exception_cause &&
+                        a.last_exception_instruction_pc == b.last_exception_instruction_pc &&
+                        a.exception_in_delay_slot == b.exception_in_delay_slot &&
+                        a.active_instruction_pc == b.active_instruction_pc &&
+                        a.active_instruction_physical_pc == b.active_instruction_physical_pc &&
+                        a.attempted_guest_instructions == b.attempted_guest_instructions &&
+                        a.retired_guest_instructions == b.retired_guest_instructions &&
+                        a.pending_guest_cycles == b.pending_guest_cycles,
+                    "FPU epoch diverged from per-instruction arithmetic, exception or PC state.");
+            require(katana_fpu_boundary_reference::observed_entries.size() ==
+                        b.attempted_guest_instructions,
+                    "FPU reference lost an observable instruction boundary.");
+            if (!a.trap_pending) require(
+                a.retired_guest_instructions == byte_size / 2u &&
+                    a.active_instruction_pc == katana::runtime::relocate_code_address(final_pc) &&
+                    a.pc == katana::runtime::relocate_code_address(entry + byte_size),
+                "FPU epoch lost its final opcode or fallthrough PC.");
+        }
+    }
 
     for (const auto entry : {0x176u, 0x17Eu, 0x188u}) {
         auto cpu_storage = std::make_unique<katana_generated::CpuState>();
