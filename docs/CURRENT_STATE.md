@@ -1,6 +1,6 @@
 # Aktueller Projektstand
 
-Stand: 8. September 2026, Produktcheckpoint r316. Historische Runs und
+Stand: 8. September 2026, Produktcheckpoint r317. Historische Runs und
 Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
 Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
 
@@ -29,44 +29,64 @@ Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
   Primary-Blockanfaenge. Drei neue private Callbackroots erschliessen weitere
   1.822 Loaded-AOT-Blockanfaenge in der Flugsequenz-Familie. Das ist
   Candidate-Fortschritt, keine automatische Proof-Promotion.
+- r317 erhaelt diese Abdeckung und erschliesst durch die gesamte belegte
+  Kameraindex-Familie weitere 208 Blockanfaenge in SHOOTING und 373 in
+  B_E101_R. Die drei neuen Entries sind im Produkt vorhanden; ihre spaeteren
+  Spielpfade sind noch nicht durch einen Lauf bestaetigt.
 - r316 korrigiert die gemeinsame Objekttexturliste: Das Laden einer
   Charaktertexturliste darf die vom Main-Owner veroeffentlichte Liste nicht
   ueberschreiben. Ein begrenzter Produkttrace bestaetigt die korrigierte
-  gemeinsame Bindung. Eine vollstaendige visuelle Objektabnahme folgt daraus
-  nicht.
+  gemeinsame Bindung. Der Nutzer bestaetigt anschliessend: Die Objekte sind
+  gefixt. Diese Objektabnahme ist ein r316-Nutzerwitness, kein automatischer
+  Beweis fuer die gesamte Grafikpipeline.
 - Alle zehn gebundenen Filmdateien sind im privaten Inhalt vorhanden und
   gegen die Originalquelle geprueft. Die acht Storyfilme wurden mit dem
   nativen Decoder vollstaendig dekodiert. Das ersetzt nicht ihren Nachweis
   innerhalb der jeweiligen Spielsequenz.
-- Mit derselben r316-EXE besteht Tails/Casinopolis einen sichtbaren
-  60-Sekunden-Debuglauf. Ein fuenfminuetiger Lauf mit einer Spielstandkopie
-  besteht ohne Crash und zeigt den Zugpfad zwischen Mystic Ruins und Station
-  Square. Die Kopie ist nicht als identischer Vorzustand des Nutzerreplays
-  belegt; der Sky-Chase-Stop wurde in diesem Lauf nicht erreicht.
+- r317 ersetzt die feste Drawanzahlgrenze durch ein Budget der tatsaechlich
+  reservierten Queue-/Geometriekapazitaet. Der sichtbare Knuckles-Replay
+  passiert den Film und den bisherigen Draw-Limit-Abbruch; die Szene am
+  Master Emerald laeuft. Nach 145,5 Sekunden folgt ein neuer Stop beim
+  naechsten Film, dessen Hook einen noch offenen Grafikframe ablehnt.
+- Beide belegten SDK-Textur-Tailcalls in Primary und Casinopolis sind jetzt
+  mit ihren exakten Callerbytes und aktiven Ownern gebunden. Der Trial-Replay
+  uebersteht mit derselben EXE 301,6 Sekunden, erreicht aber den Abschluss
+  nicht: Sonic verbleibt nach mehreren Toden unter einem Steg in Emerald
+  Coast. Der eigentliche Rueckkehrfix bleibt zur Laufabnahme offen. Beide
+  Runs verwenden isolierte Spielstandkopien; der exakte urspruengliche
+  Vorzustand der Aufzeichnungen ist nicht belegt.
 
 ## Offene Produktfragen
 
 - Sky Chase, Chao Garden und weitere noch nicht erreichte Storyfortsetzungen
   sind nicht pauschal freigegeben. Ein neuer unbekannter Block endet weiterhin
   fail-closed; ein fehlender Crashrecord ist kein Beweis fuer Fehlerfreiheit.
+- Die Movieuebergabe muss noch einen vom Spiel offen gehaltenen Grafikframe
+  korrekt abschliessen, ohne einen weiteren Simulationstick zu erfinden.
+  Der neue Knuckles-Stop ist eine fehlende native Uebergabe, kein fehlender
+  Film und keine automatische Freigabe fuer das Ueberspringen der Sequenz.
 - Untertitel und Rueckblicktexte bleiben zur Abnahme offen. Die neue,
   standardmaessig ausgeschaltete Diagnose beobachtet Timer, Textqueue,
   vollstaendige Pixelpuffer und bestehende native Texturansichten. Geaenderte
   Textpixel bei wiederverwendeter Ansicht werden als Updatefrage untersucht.
-- Itemboxinhalt, einzelne Objektteile, Raketen, Jump Pads und Menuegrafik
-  besitzen weiterhin offene visuelle Befunde. Bestehende Shader-, Tiefen-,
+- Der gemeinsame Objektcluster ist in r316 durch den Nutzer bestaetigt;
+  Menuegrafik und andere nicht erneut beurteilte Grafikpfade bleiben offen.
+  Bestehende Shader-, Tiefen-,
   Alpha- und Reihenfolgevertraege werden nicht durch pauschale Overrides
   ersetzt. Die lokale Flycast-Referenz und der originale Datenfluss bleiben
   Vergleichsbasis.
 - Stabile 30 Simulationsbilder pro Sekunde sind noch nicht durchgehend
-  erreicht. Der r316-Casinopolis-Diagnoselauf liefert rund 24,8 neue Bilder
-  pro Sekunde ueber sein aktives Fenster. Capture und Bindingdiagnostik machen
-  ihn ungeeignet fuer einen sauberen Performancevergleich.
-- r316 benoetigt 637,2 Sekunden im CLI-Export, zusaetzlich zur Wrapper-
-  Vorpruefung. Das ist ein inkrementeller Lauf mit Caches und sieben neuen
-  AOT-Compiles, kein Kaltnachweis. Das Zehn-Minuten-Ziel bleibt verfehlt.
-  Eine geaenderte Deklarationsliste im gemeinsamen Dispatchheader zieht
-  unnoetig unveraenderte Shards in den Build; diese Ursache ist eingegrenzt.
+  erreicht. Der r317-Trial-Replay liefert ueber seine gesamte Laufzeit rund
+  18,4 Simulations- und 142,4 Praesentationsbilder pro Sekunde, einschliesslich
+  Start, Menues, Laden und Gameplay. Das ist keine reine Levelmessung und
+  kein kompatibler Vergleich zur vorigen Casinopolis-Diagnose.
+- r317 benoetigt 594,9 Sekunden im CLI-Export, zusaetzlich zur Wrapper-
+  Vorpruefung. Der Gesamtlauf bleibt ueber zehn Minuten. Das ist ein
+  inkrementeller Lauf mit Caches und zehn AOT-Compiles, kein Kaltnachweis.
+  Countabhaengige Sharddeklarationen stehen jetzt nur im Aggregator; kuenftige
+  Ergaenzungen dieser Liste invalidieren damit nicht mehr den gemeinsamen
+  Header. Die Umstellung selbst baut dessen bisherige Verbraucher einmal
+  neu. Eine gemessene Zeitersparnis durch diese Entkopplung steht noch aus.
 
 ## Entwicklungsablauf
 

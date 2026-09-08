@@ -1800,8 +1800,13 @@ class NativePortGraphicsBackend final {
     void begin_frame(const NativePortFrameConfig& frame) {
         require_owner_thread();
         poll_events();
-        if (close_requested_)
-            fail(NativePortGraphicsFailure::InvalidFrame, 0u, "window-closing");
+        // WM_CLOSE requests lifecycle shutdown; it deliberately leaves the
+        // window and GPU resources alive. A request can arrive after the
+        // simulation accepted work but before its lazy BeginFrame reaches
+        // this thread. Finish that work normally so the host-stop owner can
+        // rendezvous at a completed frame instead of reporting a crash.
+        if (window_ == nullptr)
+            fail(NativePortGraphicsFailure::InvalidFrame, 0u, "window-missing");
         if (frame_open_)
             fail(NativePortGraphicsFailure::InvalidFrame, 0u, "frame-already-open");
         if (!std::all_of(frame.clear_color.begin(),

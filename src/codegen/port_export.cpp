@@ -19204,23 +19204,6 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
            "    katana::runtime::CpuState&, std::uint32_t) noexcept;\n"
         << "[[nodiscard]] bool native_chainable_entry(\n"
            "    std::uint32_t address) noexcept;\n";
-    for (std::size_t shard = 0u; shard < shard_count; ++shard)
-        header << "void append_native_dispatch_shard_"
-               << shard_suffix(shard)
-               << "(std::vector<NativePortDispatchEntry>& entries);\n";
-    for (std::size_t shard = 0u;
-         shard < loaded_aot_shards.size(); ++shard)
-        header << "void append_native_loaded_aot_modules_shard_"
-               << shard_suffix(shard)
-               << "(std::vector<"
-                   "katana::runtime::NativePortLoadedAotModuleView>& "
-                   "modules);\n";
-    for (std::size_t shard = 0u;
-         shard < runtime_image_shards.size(); ++shard)
-        header << "void append_native_runtime_images_shard_"
-               << shard_suffix(shard)
-               << "(std::vector<"
-                  "katana::runtime::NativePortRuntimeImageView>& images);\n";
     header << "} // namespace " << entry_namespace
            << "::runtime_dispatch_detail\n";
     result.push_back(
@@ -19684,8 +19667,28 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "                converted.ptr - bytes.data())));\n"
               "}\n"
               "} // namespace\n"
-           << "namespace runtime_dispatch_detail {\n"
-           << "constexpr std::string_view native_port_build_identity_marker = "
+           << "namespace runtime_dispatch_detail {\n";
+    // Only the aggregator calls these functions. Keep their count-dependent
+    // declarations out of the shared header so adding one shard does not
+    // invalidate every unchanged dispatch, loaded-AOT and runtime-image unit.
+    for (std::size_t shard = 0u; shard < shard_count; ++shard)
+        output << "void append_native_dispatch_shard_"
+               << shard_suffix(shard)
+               << "(std::vector<NativePortDispatchEntry>& entries);\n";
+    for (std::size_t shard = 0u;
+         shard < loaded_aot_shards.size(); ++shard)
+        output << "void append_native_loaded_aot_modules_shard_"
+               << shard_suffix(shard)
+               << "(std::vector<"
+                   "katana::runtime::NativePortLoadedAotModuleView>& "
+                   "modules);\n";
+    for (std::size_t shard = 0u;
+         shard < runtime_image_shards.size(); ++shard)
+        output << "void append_native_runtime_images_shard_"
+               << shard_suffix(shard)
+               << "(std::vector<"
+                  "katana::runtime::NativePortRuntimeImageView>& images);\n";
+    output << "constexpr std::string_view native_port_build_identity_marker = "
            << katana::io::quote_json(build_identity_marker) << ";\n"
            << "thread_local katana::runtime::NativePortAotServices* "
               "active_services = nullptr;\n"
