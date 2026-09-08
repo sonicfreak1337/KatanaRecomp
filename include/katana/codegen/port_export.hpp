@@ -258,6 +258,24 @@ struct NativeDiscReturnedReceiverFieldCandidate final {
         const NativeDiscReturnedReceiverFieldCandidate&) const = default;
 };
 
+// Per-function diagnostics are a sidecar view of the same analyzed program.
+// They are deliberately represented with stable strings at this public
+// boundary and remain candidate-only; they never feed roots, closure, or
+// executable admission.
+struct NativeDiscReturnedReceiverFunctionDiagnostic final {
+    std::uint32_t function_address = 0u;
+    bool present = true;
+    std::size_t instruction_count = 0u;
+    std::size_t work_items = 0u;
+    std::string outcome;
+    std::string rejection_reason;
+    std::uint32_t rejection_block_address = 0u;
+    std::uint32_t rejection_instruction_address = 0u;
+
+    [[nodiscard]] bool operator==(
+        const NativeDiscReturnedReceiverFunctionDiagnostic&) const = default;
+};
+
 enum class NativeDiscReturnedReceiverDiagnosticState : std::uint8_t {
     NotRun,
     Fresh,
@@ -287,6 +305,8 @@ struct NativeDiscReturnedReceiverDiagnosticReport final {
     bool strict_eligible = false;
     bool execution_eligible = false;
     std::string failure_reason;
+    std::vector<NativeDiscReturnedReceiverFunctionDiagnostic>
+        function_diagnostics;
     std::vector<NativeDiscReturnedReceiverSummary> returned_receivers;
     std::vector<NativeDiscReturnedReceiverFieldCandidate> field_candidates;
 };

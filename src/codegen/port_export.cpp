@@ -26589,6 +26589,89 @@ constexpr std::size_t maximum_native_disc_returned_receiver_work_items =
     return "unknown";
 }
 
+[[nodiscard]] std::string_view
+native_disc_returned_receiver_function_outcome_name(
+    const katana::analysis::detail::StaticReturnedReceiverFunctionOutcome
+        outcome) noexcept {
+    using Outcome =
+        katana::analysis::detail::StaticReturnedReceiverFunctionOutcome;
+    switch (outcome) {
+    case Outcome::Recognized:
+        return "recognized";
+    case Outcome::NoReturnOrigin:
+        return "no-return-origin";
+    case Outcome::Incomplete:
+        return "incomplete";
+    case Outcome::Budget:
+        return "budget";
+    }
+    return "unknown";
+}
+
+[[nodiscard]] std::string_view native_disc_returned_receiver_rejection_name(
+    const katana::analysis::detail::StaticReturnedReceiverRejectionReason
+        reason) noexcept {
+    using Reason =
+        katana::analysis::detail::StaticReturnedReceiverRejectionReason;
+    switch (reason) {
+    case Reason::None:
+        return "none";
+    case Reason::DuplicateBlock:
+        return "duplicate-block";
+    case Reason::MissingEntryBlock:
+        return "missing-entry-block";
+    case Reason::EmptyBlock:
+        return "empty-block";
+    case Reason::BlockStartMismatch:
+        return "block-start-mismatch";
+    case Reason::InstructionAddressGap:
+        return "instruction-address-gap";
+    case Reason::DecodedInstructionMissing:
+        return "decoded-instruction-missing";
+    case Reason::DecodedInstructionUnknown:
+        return "decoded-instruction-unknown";
+    case Reason::DelaySlotMismatch:
+        return "delay-slot-mismatch";
+    case Reason::SuccessorMissing:
+        return "successor-missing";
+    case Reason::WorkBudget:
+        return "work-budget";
+    case Reason::MissingIncomingState:
+        return "missing-incoming-state";
+    case Reason::InvalidCall:
+        return "invalid-call";
+    case Reason::UnresolvedCallTarget:
+        return "unresolved-call-target";
+    case Reason::UnknownCallAbi:
+        return "unknown-call-abi";
+    case Reason::InvalidDelaySlot:
+        return "invalid-delay-slot";
+    case Reason::IndirectTailcall:
+        return "indirect-tailcall";
+    case Reason::InvalidReturn:
+        return "invalid-return";
+    case Reason::InvalidBranch:
+        return "invalid-branch";
+    case Reason::UnsupportedInstruction:
+        return "unsupported-instruction";
+    case Reason::InvalidContinuation:
+        return "invalid-continuation";
+    case Reason::UnreachedBlock:
+        return "unreached-block";
+    case Reason::NoReturn:
+        return "no-return";
+    case Reason::NullOnlyReturn:
+        return "null-only-return";
+    case Reason::ReturnValueUnknown:
+        return "return-value-unknown";
+    case Reason::ReturnOriginConflict:
+        return "return-origin-conflict";
+    case Reason::IncompleteAnalysis:
+        return "incomplete-analysis";
+    }
+    return "unknown";
+}
+
 [[nodiscard]] NativeDiscReturnedReceiverDiagnosticReport
 make_native_disc_returned_receiver_diagnostic(
     const katana::io::ExecutableImage& image,
@@ -26618,6 +26701,24 @@ make_native_disc_returned_receiver_diagnostic(
         report.truncated = inventory.truncated;
         report.scan_complete = !inventory.truncated &&
                                inventory.incomplete_functions == 0u;
+
+        report.function_diagnostics.reserve(
+            inventory.function_diagnostics.size());
+        for (const auto& diagnostic : inventory.function_diagnostics) {
+            report.function_diagnostics.push_back(
+                NativeDiscReturnedReceiverFunctionDiagnostic{
+                    diagnostic.function_address,
+                    diagnostic.present,
+                    diagnostic.instruction_count,
+                    diagnostic.work_items,
+                    std::string(
+                        native_disc_returned_receiver_function_outcome_name(
+                            diagnostic.outcome)),
+                    std::string(native_disc_returned_receiver_rejection_name(
+                        diagnostic.rejection_reason)),
+                    diagnostic.rejection_block_address,
+                    diagnostic.rejection_instruction_address});
+        }
 
         report.returned_receivers.reserve(inventory.returned_receivers.size());
         for (const auto& summary : inventory.returned_receivers) {
@@ -26664,6 +26765,25 @@ make_native_disc_returned_receiver_diagnostic(
         report.failure_reason = "returned-receiver-diagnostic-exception";
     }
     return report;
+}
+
+void serialize_native_disc_returned_receiver_function_diagnostic(
+    std::ostringstream& output,
+    const NativeDiscReturnedReceiverFunctionDiagnostic& diagnostic) {
+    output << "{\"function_address\":" << diagnostic.function_address
+           << ",\"present\":"
+           << (diagnostic.present ? "true" : "false")
+           << ",\"instruction_count\":"
+           << diagnostic.instruction_count
+           << ",\"work_items\":" << diagnostic.work_items
+           << ",\"outcome\":"
+           << katana::io::quote_json(diagnostic.outcome)
+           << ",\"rejection_reason\":"
+           << katana::io::quote_json(diagnostic.rejection_reason)
+           << ",\"rejection_block_address\":"
+           << diagnostic.rejection_block_address
+           << ",\"rejection_instruction_address\":"
+           << diagnostic.rejection_instruction_address << '}';
 }
 
 void serialize_native_disc_returned_receiver_summary(
@@ -26756,7 +26876,14 @@ std::string serialize_native_disc_returned_receiver_diagnostic(
            << (report.execution_eligible ? "true" : "false")
            << ",\"failure_reason\":"
            << katana::io::quote_json(report.failure_reason)
-           << ",\"returned_receivers\":[";
+           << ",\"function_diagnostics\":[";
+    for (std::size_t index = 0u; index < report.function_diagnostics.size();
+         ++index) {
+        if (index != 0u) output << ',';
+        serialize_native_disc_returned_receiver_function_diagnostic(
+            output, report.function_diagnostics[index]);
+    }
+    output << "],\"returned_receivers\":[";
     for (std::size_t index = 0u; index < report.returned_receivers.size();
          ++index) {
         if (index != 0u) output << ',';

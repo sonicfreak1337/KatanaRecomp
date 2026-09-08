@@ -573,8 +573,34 @@ struct ReturnedReceiverFunctionResult final {
     std::size_t work_items = 0u;
     bool saw_return = false;
     ReturnedReceiverValue return_value;
+    bool return_origin_conflict = false;
+    bool saw_unresolved_call_target = false;
+    bool saw_unknown_call_abi = false;
+    std::uint32_t unresolved_call_block_address = 0u;
+    std::uint32_t unresolved_call_instruction_address = 0u;
+    std::uint32_t unknown_call_abi_block_address = 0u;
+    std::uint32_t unknown_call_abi_instruction_address = 0u;
+    std::uint32_t return_value_block_address = 0u;
+    std::uint32_t return_value_instruction_address = 0u;
+    StaticReturnedReceiverRejectionReason rejection_reason =
+        StaticReturnedReceiverRejectionReason::None;
+    std::uint32_t rejection_block_address = 0u;
+    std::uint32_t rejection_instruction_address = 0u;
     std::vector<ReturnedReceiverFieldObservation> field_observations;
 };
+
+void note_returned_receiver_rejection(
+    ReturnedReceiverFunctionResult& result,
+    const StaticReturnedReceiverRejectionReason reason,
+    const std::uint32_t block_address = 0u,
+    const std::uint32_t instruction_address = 0u) noexcept {
+    if (result.rejection_reason !=
+        StaticReturnedReceiverRejectionReason::None)
+        return;
+    result.rejection_reason = reason;
+    result.rejection_block_address = block_address;
+    result.rejection_instruction_address = instruction_address;
+}
 
 [[nodiscard]] ReturnedReceiverFunctionResult analyze_returned_receiver_function(
     const katana::io::ExecutableImage& image,
@@ -595,38 +621,83 @@ struct ReturnedReceiverFunctionResult final {
     for (std::size_t index = 0u; index < function.blocks.size(); ++index) {
         const auto [iterator, inserted] =
             block_indices.emplace(function.blocks[index].start_address, index);
-        if (!inserted) result.complete = false;
+        if (!inserted) {
+            result.complete = false;
+            note_returned_receiver_rejection(
+                result, StaticReturnedReceiverRejectionReason::DuplicateBlock,
+                function.blocks[index].start_address);
+        }
         static_cast<void>(iterator);
     }
     const auto entry = block_indices.find(function.entry_address);
     if (entry == block_indices.end()) {
         result.complete = false;
+        note_returned_receiver_rejection(
+            result, StaticReturnedReceiverRejectionReason::MissingEntryBlock,
+            function.entry_address);
         return finish();
     }
 
     for (const auto& block : function.blocks) {
         if (block.instructions.empty()) {
             result.complete = false;
+            note_returned_receiver_rejection(
+                result, StaticReturnedReceiverRejectionReason::EmptyBlock,
+                block.start_address);
             continue;
         }
-        if (block.instructions.front().source_address != block.start_address)
+        if (block.instructions.front().source_address != block.start_address) {
             result.complete = false;
+            note_returned_receiver_rejection(
+                result,
+                StaticReturnedReceiverRejectionReason::BlockStartMismatch,
+                block.start_address, block.instructions.front().source_address);
+        }
         std::optional<std::uint32_t> previous_address;
         for (const auto& instruction : block.instructions) {
             if (previous_address.has_value() &&
-                instruction.source_address != *previous_address + 2u)
+                instruction.source_address != *previous_address + 2u) {
                 result.complete = false;
+                note_returned_receiver_rejection(
+                    result,
+                    StaticReturnedReceiverRejectionReason::InstructionAddressGap,
+                    block.start_address, instruction.source_address);
+            }
             previous_address = instruction.source_address;
             const auto* decoded = returned_decoded_line_at(
                 decoded_index, instruction.source_address);
-            if (decoded == nullptr || !decoded->instruction.is_known() ||
-                decoded->is_delay_slot !=
-                    (instruction.delay_slot.role ==
-                     katana::ir::DelaySlotRole::Slot))
+            if (decoded == nullptr) {
                 result.complete = false;
+                note_returned_receiver_rejection(
+                    result,
+                    StaticReturnedReceiverRejectionReason::
+                        DecodedInstructionMissing,
+                    block.start_address, instruction.source_address);
+            } else if (!decoded->instruction.is_known()) {
+                result.complete = false;
+                note_returned_receiver_rejection(
+                    result,
+                    StaticReturnedReceiverRejectionReason::
+                        DecodedInstructionUnknown,
+                    block.start_address, instruction.source_address);
+            } else if (decoded->is_delay_slot !=
+                       (instruction.delay_slot.role ==
+                        katana::ir::DelaySlotRole::Slot)) {
+                result.complete = false;
+                note_returned_receiver_rejection(
+                    result,
+                    StaticReturnedReceiverRejectionReason::DelaySlotMismatch,
+                    block.start_address, instruction.source_address);
+            }
         }
         for (const auto successor : block.successors) {
-            if (!block_indices.contains(successor)) result.complete = false;
+            if (!block_indices.contains(successor)) {
+                result.complete = false;
+                note_returned_receiver_rejection(
+                    result,
+                    StaticReturnedReceiverRejectionReason::SuccessorMissing,
+                    block.start_address);
+            }
         }
     }
     if (!result.complete) return finish();
@@ -657,12 +728,19 @@ struct ReturnedReceiverFunctionResult final {
         if (!work_budget.charge()) {
             result.complete = false;
             result.truncated = true;
+            note_returned_receiver_rejection(
+                result, StaticReturnedReceiverRejectionReason::WorkBudget,
+                function.blocks[worklist.front()].start_address);
             break;
         }
         const auto block_index = worklist.front();
         worklist.pop_front();
         if (!incoming[block_index].has_value()) {
             result.complete = false;
+            note_returned_receiver_rejection(
+                result,
+                StaticReturnedReceiverRejectionReason::MissingIncomingState,
+                function.blocks[block_index].start_address);
             continue;
         }
         reached[block_index] = true;
@@ -675,15 +753,39 @@ struct ReturnedReceiverFunctionResult final {
             if (!work_budget.charge()) {
                 result.complete = false;
                 result.truncated = true;
+                note_returned_receiver_rejection(
+                    result, StaticReturnedReceiverRejectionReason::WorkBudget,
+                    block.start_address, block.instructions[index].source_address);
                 block_valid = false;
                 break;
             }
             const auto& instruction = block.instructions[index];
             const auto* decoded = returned_decoded_line_at(
                 decoded_index, instruction.source_address);
-            if (decoded == nullptr || !decoded->instruction.is_known() ||
-                decoded->is_delay_slot ||
+            if (decoded == nullptr) {
+                note_returned_receiver_rejection(
+                    result,
+                    StaticReturnedReceiverRejectionReason::
+                        DecodedInstructionMissing,
+                    block.start_address, instruction.source_address);
+                block_valid = false;
+                break;
+            }
+            if (!decoded->instruction.is_known()) {
+                note_returned_receiver_rejection(
+                    result,
+                    StaticReturnedReceiverRejectionReason::
+                        DecodedInstructionUnknown,
+                    block.start_address, instruction.source_address);
+                block_valid = false;
+                break;
+            }
+            if (decoded->is_delay_slot ||
                 instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot) {
+                note_returned_receiver_rejection(
+                    result, StaticReturnedReceiverRejectionReason::
+                                DelaySlotMismatch,
+                    block.start_address, instruction.source_address);
                 block_valid = false;
                 break;
             }
@@ -705,17 +807,29 @@ struct ReturnedReceiverFunctionResult final {
                             katana::sh4::InstructionKind::Bsr ||
                         decoded->instruction.control_flow != ControlFlow::Call ||
                         !instruction.target_address.has_value()) {
+                        note_returned_receiver_rejection(
+                            result,
+                            StaticReturnedReceiverRejectionReason::InvalidCall,
+                            block.start_address, instruction.source_address);
                         block_valid = false;
                         break;
                     }
                 } else if (indirect_call) {
                     if (!literal_call || decoded->instruction.control_flow !=
                                              ControlFlow::IndirectCall) {
+                        note_returned_receiver_rejection(
+                            result,
+                            StaticReturnedReceiverRejectionReason::InvalidCall,
+                            block.start_address, instruction.source_address);
                         block_valid = false;
                         break;
                     }
                 } else if (decoded->instruction.control_flow !=
                            ControlFlow::IndirectBranch) {
+                    note_returned_receiver_rejection(
+                        result,
+                        StaticReturnedReceiverRejectionReason::InvalidCall,
+                        block.start_address, instruction.source_address);
                     block_valid = false;
                     break;
                 }
@@ -726,12 +840,43 @@ struct ReturnedReceiverFunctionResult final {
                               *decoded, instruction, state)
                         : std::optional<std::uint32_t>{};
 
+                if ((direct_call || literal_call) && !callee.has_value()) {
+                    result.saw_unresolved_call_target = true;
+                    if (result.unresolved_call_instruction_address == 0u) {
+                        result.unresolved_call_block_address =
+                            block.start_address;
+                        result.unresolved_call_instruction_address =
+                            instruction.source_address;
+                    }
+                } else if ((direct_call || literal_call) &&
+                           image.guest_call_abi() !=
+                               katana::io::GuestCallAbi::SuperHC) {
+                    result.saw_unknown_call_abi = true;
+                    if (result.unknown_call_abi_instruction_address == 0u) {
+                        result.unknown_call_abi_block_address =
+                            block.start_address;
+                        result.unknown_call_abi_instruction_address =
+                            instruction.source_address;
+                    }
+                }
+
                 const auto delayed = consume_returned_receiver_delay(
                     block, index, image, *decoded, instruction, state,
                     decoded_index, work_budget);
                 if (!delayed.has_value()) {
-                    result.truncated =
-                        result.truncated || work_budget.exhausted;
+                    if (work_budget.exhausted) {
+                        result.truncated = true;
+                        note_returned_receiver_rejection(
+                            result,
+                            StaticReturnedReceiverRejectionReason::WorkBudget,
+                            block.start_address, instruction.source_address);
+                    } else {
+                        note_returned_receiver_rejection(
+                            result,
+                            StaticReturnedReceiverRejectionReason::
+                                InvalidDelaySlot,
+                            block.start_address, instruction.source_address);
+                    }
                     block_valid = false;
                     break;
                 }
@@ -754,6 +899,10 @@ struct ReturnedReceiverFunctionResult final {
                     // The callback field can still be inventoried at this
                     // exact tailcall, but the unknown jump edge prevents a
                     // complete return summary.
+                    note_returned_receiver_rejection(
+                        result,
+                        StaticReturnedReceiverRejectionReason::IndirectTailcall,
+                        block.start_address, instruction.source_address);
                     block_valid = false;
                     break;
                 }
@@ -768,26 +917,58 @@ struct ReturnedReceiverFunctionResult final {
             if (instruction.operation == Operation::Return) {
                 if (decoded->instruction.control_flow != ControlFlow::Return ||
                     !block.successors.empty() || block.has_indirect_successor) {
+                    note_returned_receiver_rejection(
+                        result,
+                        StaticReturnedReceiverRejectionReason::InvalidReturn,
+                        block.start_address, instruction.source_address);
                     block_valid = false;
                     break;
                 }
                 const auto delayed = consume_returned_receiver_delay(
                     block, index, image, *decoded, instruction, state,
                     decoded_index, work_budget);
-                if (!delayed.has_value() ||
-                    delayed->next_instruction != block.instructions.size()) {
-                    result.truncated =
-                        result.truncated || work_budget.exhausted;
+                if (!delayed.has_value()) {
+                    if (work_budget.exhausted) {
+                        result.truncated = true;
+                        note_returned_receiver_rejection(
+                            result,
+                            StaticReturnedReceiverRejectionReason::WorkBudget,
+                            block.start_address, instruction.source_address);
+                    } else {
+                        note_returned_receiver_rejection(
+                            result,
+                            StaticReturnedReceiverRejectionReason::
+                                InvalidDelaySlot,
+                            block.start_address, instruction.source_address);
+                    }
                     block_valid = false;
                     break;
                 }
-                if (!result.saw_return)
+                if (delayed->next_instruction != block.instructions.size()) {
+                    note_returned_receiver_rejection(
+                        result,
+                        StaticReturnedReceiverRejectionReason::InvalidReturn,
+                        block.start_address, instruction.source_address);
+                    block_valid = false;
+                    break;
+                }
+                result.return_value_block_address = block.start_address;
+                result.return_value_instruction_address =
+                    instruction.source_address;
+                const auto returned_value =
+                    delayed->state_after_delay.registers[0u];
+                if (!result.saw_return) {
+                    result.return_value = returned_value;
+                } else {
+                    if (result.return_value.origin.has_value() &&
+                        returned_value.origin.has_value() &&
+                        *result.return_value.origin !=
+                            *returned_value.origin)
+                        result.return_origin_conflict = true;
                     result.return_value =
-                        delayed->state_after_delay.registers[0u];
-                else
-                    result.return_value = join_returned_receiver_values(
-                        result.return_value,
-                        delayed->state_after_delay.registers[0u]);
+                        join_returned_receiver_values(result.return_value,
+                                                      returned_value);
+                }
                 result.saw_return = true;
                 terminated = true;
                 index = delayed->next_instruction;
@@ -809,21 +990,48 @@ struct ReturnedReceiverFunctionResult final {
                     (conditional_branch && block.successors.size() != 2u) ||
                     (direct_branch && block.successors.size() != 1u) ||
                     block.has_indirect_successor) {
+                    note_returned_receiver_rejection(
+                        result,
+                        StaticReturnedReceiverRejectionReason::InvalidBranch,
+                        block.start_address, instruction.source_address);
                     block_valid = false;
                     break;
                 }
                 const auto delayed = consume_returned_receiver_delay(
                     block, index, image, *decoded, instruction, state,
                     decoded_index, work_budget);
-                if (!delayed.has_value() ||
-                    delayed->next_instruction != block.instructions.size()) {
-                    result.truncated =
-                        result.truncated || work_budget.exhausted;
+                if (!delayed.has_value()) {
+                    if (work_budget.exhausted) {
+                        result.truncated = true;
+                        note_returned_receiver_rejection(
+                            result,
+                            StaticReturnedReceiverRejectionReason::WorkBudget,
+                            block.start_address, instruction.source_address);
+                    } else {
+                        note_returned_receiver_rejection(
+                            result,
+                            StaticReturnedReceiverRejectionReason::
+                                InvalidDelaySlot,
+                            block.start_address, instruction.source_address);
+                    }
+                    block_valid = false;
+                    break;
+                }
+                if (delayed->next_instruction != block.instructions.size()) {
+                    note_returned_receiver_rejection(
+                        result,
+                        StaticReturnedReceiverRejectionReason::InvalidBranch,
+                        block.start_address, instruction.source_address);
                     block_valid = false;
                     break;
                 }
                 for (const auto successor : block.successors) {
                     if (!enqueue(successor, delayed->state_after_delay)) {
+                        note_returned_receiver_rejection(
+                            result,
+                            StaticReturnedReceiverRejectionReason::
+                                SuccessorMissing,
+                            block.start_address, instruction.source_address);
                         block_valid = false;
                         break;
                     }
@@ -834,6 +1042,11 @@ struct ReturnedReceiverFunctionResult final {
 
             if (!apply_returned_receiver_noncontrol(state, image, *decoded,
                                                     instruction)) {
+                note_returned_receiver_rejection(
+                    result,
+                    StaticReturnedReceiverRejectionReason::
+                        UnsupportedInstruction,
+                    block.start_address, instruction.source_address);
                 block_valid = false;
                 break;
             }
@@ -846,16 +1059,107 @@ struct ReturnedReceiverFunctionResult final {
         }
         if (terminated) continue;
         if (block.has_indirect_successor || block.successors.size() != 1u) {
+            note_returned_receiver_rejection(
+                result,
+                StaticReturnedReceiverRejectionReason::InvalidContinuation,
+                block.start_address);
             result.complete = false;
             continue;
         }
-        if (!enqueue(block.successors.front(), state))
+        if (!enqueue(block.successors.front(), state)) {
+            note_returned_receiver_rejection(
+                result, StaticReturnedReceiverRejectionReason::SuccessorMissing,
+                block.start_address);
             result.complete = false;
+        }
     }
 
-    if (std::find(reached.begin(), reached.end(), false) != reached.end())
+    const auto unreached =
+        std::find(reached.begin(), reached.end(), false);
+    if (unreached != reached.end()) {
         result.complete = false;
+        const auto block_index = static_cast<std::size_t>(
+            unreached - reached.begin());
+        note_returned_receiver_rejection(
+            result, StaticReturnedReceiverRejectionReason::UnreachedBlock,
+            function.blocks[block_index].start_address);
+    }
     return finish();
+}
+
+[[nodiscard]] StaticReturnedReceiverFunctionDiagnostic
+make_returned_receiver_function_diagnostic(
+    const katana::ir::Function& function,
+    const std::size_t instruction_count,
+    const ReturnedReceiverFunctionResult& result) noexcept {
+    using Outcome = StaticReturnedReceiverFunctionOutcome;
+    using Reason = StaticReturnedReceiverRejectionReason;
+
+    Outcome outcome = Outcome::Incomplete;
+    if (result.truncated) {
+        outcome = Outcome::Budget;
+    } else if (!result.complete) {
+        outcome = Outcome::Incomplete;
+    } else if (result.saw_return && !result.return_value.unknown &&
+               result.return_value.origin.has_value()) {
+        outcome = Outcome::Recognized;
+    } else {
+        outcome = Outcome::NoReturnOrigin;
+    }
+
+    auto reason = result.rejection_reason;
+    auto rejection_block_address = result.rejection_block_address;
+    auto rejection_instruction_address =
+        result.rejection_instruction_address;
+    if (reason == Reason::None) {
+        if (outcome == Outcome::Budget) {
+            reason = Reason::WorkBudget;
+        } else if (outcome == Outcome::Incomplete) {
+            reason = Reason::IncompleteAnalysis;
+        } else if (outcome == Outcome::NoReturnOrigin) {
+            if (!result.saw_return) {
+                reason = Reason::NoReturn;
+                rejection_block_address = function.entry_address;
+            } else if (result.return_origin_conflict) {
+                reason = Reason::ReturnOriginConflict;
+                rejection_block_address = result.return_value_block_address;
+                rejection_instruction_address =
+                    result.return_value_instruction_address;
+            } else if (!result.return_value.unknown &&
+                       !result.return_value.origin.has_value() &&
+                       result.return_value.may_be_null) {
+                reason = Reason::NullOnlyReturn;
+                rejection_block_address = result.return_value_block_address;
+                rejection_instruction_address =
+                    result.return_value_instruction_address;
+            } else if (result.saw_unresolved_call_target) {
+                reason = Reason::UnresolvedCallTarget;
+                rejection_block_address = result.unresolved_call_block_address;
+                rejection_instruction_address =
+                    result.unresolved_call_instruction_address;
+            } else if (result.saw_unknown_call_abi) {
+                reason = Reason::UnknownCallAbi;
+                rejection_block_address = result.unknown_call_abi_block_address;
+                rejection_instruction_address =
+                    result.unknown_call_abi_instruction_address;
+            } else {
+                reason = Reason::ReturnValueUnknown;
+                rejection_block_address = result.return_value_block_address;
+                rejection_instruction_address =
+                    result.return_value_instruction_address;
+            }
+        }
+    }
+
+    return StaticReturnedReceiverFunctionDiagnostic{
+        function.entry_address,
+        true,
+        instruction_count,
+        result.work_items,
+        outcome,
+        reason,
+        rejection_block_address,
+        rejection_instruction_address};
 }
 
 } // namespace
@@ -943,6 +1247,9 @@ StaticReturnedReceiverInventory discover_static_returned_receiver_contracts(
         inventory.work_items = work_budget.consumed;
         inventory.truncated = inventory.truncated || result.truncated;
         if (!result.complete) ++inventory.incomplete_functions;
+        inventory.function_diagnostics.push_back(
+            make_returned_receiver_function_diagnostic(
+                function, function_instruction_count, result));
         if (result.truncated) break;
 
         if (result.complete && result.saw_return &&
@@ -993,6 +1300,13 @@ StaticReturnedReceiverInventory discover_static_returned_receiver_contracts(
         std::unique(inventory.returned_receivers.begin(),
                     inventory.returned_receivers.end()),
         inventory.returned_receivers.end());
+
+    std::sort(
+        inventory.function_diagnostics.begin(),
+        inventory.function_diagnostics.end(),
+        [](const auto& left, const auto& right) {
+            return left.function_address < right.function_address;
+        });
 
     std::sort(inventory.field_candidates.begin(), inventory.field_candidates.end(),
               [](const auto& left, const auto& right) {

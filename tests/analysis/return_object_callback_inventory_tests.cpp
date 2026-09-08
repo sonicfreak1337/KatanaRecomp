@@ -914,6 +914,19 @@ void test_returned_receiver_budget_and_unknown_abi() {
                 known_inventory.returned_receivers.front().origin
                         .call_instruction_address == 0x1100u,
             "Der bekannte SuperH-Returnvertrag fehlt.");
+    require(known_inventory.function_diagnostics.size() == 1u,
+            "Die erkannte Funktion fehlt in der Per-Function-Diagnose.");
+    const auto& known_diagnostic =
+        known_inventory.function_diagnostics.front();
+    require(known_diagnostic.function_address == 0x1100u &&
+                known_diagnostic.present &&
+                known_diagnostic.outcome ==
+                    katana::analysis::detail::
+                        StaticReturnedReceiverFunctionOutcome::Recognized &&
+                known_diagnostic.rejection_reason ==
+                    katana::analysis::detail::
+                        StaticReturnedReceiverRejectionReason::None,
+            "Die erkannte Funktion besitzt falschen Diagnoseausgang.");
 
     auto unknown_abi = fixture;
     unknown_abi.image.set_guest_call_abi(katana::io::GuestCallAbi::Unknown);
@@ -923,6 +936,18 @@ void test_returned_receiver_budget_and_unknown_abi() {
     require(unknown_inventory.returned_receivers.empty() &&
                 unknown_inventory.incomplete_functions == 0u,
             "Unknown-ABI durfte BSR-R0-RTS nicht als Receiver anerkennen.");
+    require(unknown_inventory.function_diagnostics.size() == 1u &&
+                unknown_inventory.function_diagnostics.front().outcome ==
+                    katana::analysis::detail::
+                        StaticReturnedReceiverFunctionOutcome::NoReturnOrigin &&
+                unknown_inventory.function_diagnostics.front().rejection_reason ==
+                    katana::analysis::detail::
+                        StaticReturnedReceiverRejectionReason::UnknownCallAbi &&
+                unknown_inventory.function_diagnostics.front()
+                        .rejection_block_address == 0x1100u &&
+                unknown_inventory.function_diagnostics.front()
+                        .rejection_instruction_address == 0x1100u,
+            "Die Unknown-ABI-Ablehnung besitzt keine konkrete Diagnoseadresse.");
 
     const auto budget_inventory =
         katana::analysis::detail::discover_static_returned_receiver_contracts(
@@ -935,6 +960,18 @@ void test_returned_receiver_budget_and_unknown_abi() {
                     budget_inventory.work_items &&
                 budget_inventory.returned_receivers.empty(),
             "Das globale Workbudget belastet nicht die echten CFG-Besuche.");
+    require(budget_inventory.function_diagnostics.size() == 1u &&
+                budget_inventory.function_diagnostics.front().outcome ==
+                    katana::analysis::detail::
+                        StaticReturnedReceiverFunctionOutcome::Budget &&
+                budget_inventory.function_diagnostics.front().rejection_reason ==
+                    katana::analysis::detail::
+                        StaticReturnedReceiverRejectionReason::WorkBudget &&
+                budget_inventory.function_diagnostics.front()
+                        .rejection_block_address == 0x1100u &&
+                budget_inventory.function_diagnostics.front()
+                        .rejection_instruction_address == 0x1100u,
+            "Die Budget-Ablehnung besitzt keine konkrete Diagnoseadresse.");
 }
 
 void test_returned_receiver_tailcall_field_observation() {
@@ -957,6 +994,18 @@ void test_returned_receiver_tailcall_field_observation() {
                 !candidate.complete && candidate.candidate_only &&
                 !candidate.strict_eligible && !candidate.execution_eligible,
             "Der Tailcall-Receivercandidate besitzt falsche Herkunft.");
+    require(inventory.function_diagnostics.size() == 1u &&
+                inventory.function_diagnostics.front().outcome ==
+                    katana::analysis::detail::
+                        StaticReturnedReceiverFunctionOutcome::Incomplete &&
+                inventory.function_diagnostics.front().rejection_reason ==
+                    katana::analysis::detail::
+                        StaticReturnedReceiverRejectionReason::IndirectTailcall &&
+                inventory.function_diagnostics.front()
+                        .rejection_block_address == 0x5000u &&
+                inventory.function_diagnostics.front()
+                        .rejection_instruction_address == 0x5006u,
+            "Die Tailcall-Ablehnung besitzt keine konkrete Diagnoseadresse.");
 }
 } // namespace
 

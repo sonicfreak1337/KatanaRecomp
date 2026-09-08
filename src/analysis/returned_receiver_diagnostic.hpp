@@ -48,9 +48,68 @@ struct StaticReturnedReceiverFieldCandidate final {
         default;
 };
 
+// One deterministic, bounded status record is emitted for every distinct
+// function that the diagnostic actually examines.  The record is descriptive
+// only: it never participates in callback discovery, root closure, strict
+// admission, or executable dispatch.
+enum class StaticReturnedReceiverFunctionOutcome : std::uint8_t {
+    Recognized,
+    NoReturnOrigin,
+    Incomplete,
+    Budget,
+};
+
+enum class StaticReturnedReceiverRejectionReason : std::uint8_t {
+    None,
+    DuplicateBlock,
+    MissingEntryBlock,
+    EmptyBlock,
+    BlockStartMismatch,
+    InstructionAddressGap,
+    DecodedInstructionMissing,
+    DecodedInstructionUnknown,
+    DelaySlotMismatch,
+    SuccessorMissing,
+    WorkBudget,
+    MissingIncomingState,
+    InvalidCall,
+    UnresolvedCallTarget,
+    UnknownCallAbi,
+    InvalidDelaySlot,
+    IndirectTailcall,
+    InvalidReturn,
+    InvalidBranch,
+    UnsupportedInstruction,
+    InvalidContinuation,
+    UnreachedBlock,
+    NoReturn,
+    NullOnlyReturn,
+    ReturnValueUnknown,
+    ReturnOriginConflict,
+    IncompleteAnalysis,
+};
+
+struct StaticReturnedReceiverFunctionDiagnostic final {
+    std::uint32_t function_address = 0u;
+    bool present = true;
+    std::size_t instruction_count = 0u;
+    std::size_t work_items = 0u;
+    StaticReturnedReceiverFunctionOutcome outcome =
+        StaticReturnedReceiverFunctionOutcome::Incomplete;
+    StaticReturnedReceiverRejectionReason rejection_reason =
+        StaticReturnedReceiverRejectionReason::None;
+    std::uint32_t rejection_block_address = 0u;
+    std::uint32_t rejection_instruction_address = 0u;
+
+    bool operator==(const StaticReturnedReceiverFunctionDiagnostic&) const =
+        default;
+};
+
 struct StaticReturnedReceiverInventory final {
     std::vector<StaticReturnedReceiverContract> returned_receivers;
     std::vector<StaticReturnedReceiverFieldCandidate> field_candidates;
+    std::vector<StaticReturnedReceiverFunctionDiagnostic>
+        function_diagnostics;
     std::size_t functions_examined = 0u;
     std::size_t instructions_examined = 0u;
     std::size_t work_items = 0u;
