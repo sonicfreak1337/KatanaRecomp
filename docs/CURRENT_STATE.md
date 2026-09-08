@@ -1,6 +1,6 @@
 # Aktueller Projektstand
 
-Stand: 8. September 2026, Produktcheckpoint r317. Historische Runs und
+Stand: 8. September 2026, Produktcheckpoint r318. Historische Runs und
 Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
 Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
 
@@ -55,16 +55,35 @@ Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
   Coast. Der eigentliche Rueckkehrfix bleibt zur Laufabnahme offen. Beide
   Runs verwenden isolierte Spielstandkopien; der exakte urspruengliche
   Vorzustand der Aufzeichnungen ist nicht belegt.
+- r318 erhaelt alle 249 Loaded-AOT-Modulbindungen, alle 250.699 Primary-
+  und alle bisherigen 699.496 Loaded-Blockanfaenge. Eine quellgebundene
+  Parent-/Child-Aufraeumfamilie ergaenzt elf Blockanfaenge in SHOOTING;
+  der im Nutzercrash fehlende Cleanup-Entry ist jetzt vorkompiliert.
+  Die Familieninventur umfasst 250 Programmabbilder. Dies bleibt
+  Candidate-Fortschritt ohne automatische Proof-Promotion.
+- r318 schliesst beim Movieaufruf den vorhandenen nativen Grafikframe ab,
+  ohne einen zusaetzlichen Simulationstick oder Storyskip. Der sichtbare
+  Knuckles-Replay passiert den bisherigen Uebergabestop, spielt den
+  Folgefilm vollstaendig und erreicht Station Square. Der angeforderte
+  Fuenf-Minuten-Lauf endet ohne Crash; inklusive Abschlussarbeiten sind es
+  308,5 Sekunden. Die gezielte Moviefortsetzung ist damit bestaetigt,
+  nicht die gesamte Knuckles-Story.
 
 ## Offene Produktfragen
 
 - Sky Chase, Chao Garden und weitere noch nicht erreichte Storyfortsetzungen
   sind nicht pauschal freigegeben. Ein neuer unbekannter Block endet weiterhin
   fail-closed; ein fehlender Crashrecord ist kein Beweis fuer Fehlerfreiheit.
-- Die Movieuebergabe muss noch einen vom Spiel offen gehaltenen Grafikframe
-  korrekt abschliessen, ohne einen weiteren Simulationstick zu erfinden.
-  Der neue Knuckles-Stop ist eine fehlende native Uebergabe, kein fehlender
-  Film und keine automatische Freigabe fuer das Ueberspringen der Sequenz.
+- Der neue Sky-Chase-Cleanup ist im r318-Produkt gebunden, aber noch nicht
+  im betroffenen Spielpfad abgenommen. Der Nutzerreplay weicht mit der
+  vorhandenen Savekopie nach Mystic Ruins ab und wird gezielt beendet.
+  Dieser Lauf gilt weder als Sky-Chase-Crashabnahme noch als HUD-Diagnose.
+  Der mechanische Selektorkatalog enthaelt Sky Chase; der aktuelle
+  direkte Launcher bietet jedoch nur Action Stages und einen nicht
+  startfaehigen Eventvorschau-Eintrag. Ein gepruefter Sky-Chase-Einstieg
+  fehlt. HUD und Fadenkreuz bleiben zur Diagnose offen; die begrenzte,
+  standardmaessig ausgeschaltete Spritebeobachtung unterscheidet jetzt
+  korrekt zwischen gebundenen und ungebundenen Texturen.
 - Untertitel und Rueckblicktexte bleiben zur Abnahme offen. Die neue,
   standardmaessig ausgeschaltete Diagnose beobachtet Timer, Textqueue,
   vollstaendige Pixelpuffer und bestehende native Texturansichten. Geaenderte
@@ -87,6 +106,18 @@ Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
   Ergaenzungen dieser Liste invalidieren damit nicht mehr den gemeinsamen
   Header. Die Umstellung selbst baut dessen bisherige Verbraucher einmal
   neu. Eine gemessene Zeitersparnis durch diese Entkopplung steht noch aus.
+- r318 benoetigt 485,6 Sekunden im CLI und 564,3 Sekunden fuer den gesamten
+  Export-Wrapper einschliesslich Vorpruefung und Abschlussarbeiten. Die
+  vorherige gezielte Komponentenverifikation ist darin nicht enthalten.
+  Das ist ein inkrementeller Cachelauf unter zehn Minuten, kein Kaltexport.
+  1.083 von 1.084 generierten AOT-Einheiten kommen aus dem Codegen-Cache;
+  tatsaechlich werden eine AOT-Einheit, 58 Dispatch-Shards, ein Loaded-Shard
+  und drei weitere C++-Dateien kompiliert. Der Hostbuild dauert 107,2 Sekunden.
+  Der gemeinsame Dispatchheader bleibt unveraendert. Ein weiterer
+  Bauzeitverlust ist konkret belegt: Elf neue Eintraege verschieben die
+  festen 8.192-Zeilen-Grenzen von 58 Dispatchdateien. Eine nach Adresse
+  stabile Aufteilung wird fuer den naechsten Batch vorbereitet; sie ist
+  noch nicht implementiert oder als Zeitgewinn gemessen.
 
 ## Entwicklungsablauf
 
