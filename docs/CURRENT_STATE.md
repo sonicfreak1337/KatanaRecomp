@@ -1,144 +1,112 @@
 # Aktueller Projektstand
 
-Stand: 28. August 2026. Diese Datei enthaelt nur die aktuelle
-Entwicklungswahrheit. Historische Runs, ABI-Zwischenstaende und erledigte
-Tasks stehen in `STATUS.md`, `TASKS.md`, `ROADMAP.md` und Git.
+Stand: 8. September 2026, Produktcheckpoint r316. Historische Runs und
+Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
+Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
 
-## Ziel und Releasegate
+## Produktziel und Grenzen
 
-KatanaRecomp erzeugt statisch rekompilierte native PC-Ports. Der Produktpfad
-enthaelt keinen Emulator, Interpreter, JIT, Runtime-Decoder, PVR-/TA-Replay
-oder geratenen Kontrollfluss.
+Katana erzeugt statisch rekompilierte native PC-Ports. Der Produktpfad
+enthaelt keinen Emulator, Interpreter, JIT, Runtime-Decoder oder geratenen
+Kontrollfluss. NativeBringup bleibt nicht releasefaehig; ein funktionierender
+Teil des Spiels bedeutet keine vollstaendige Closure oder Releaseabnahme.
 
-Der aktuelle Stand ist Pre-Alpha `v0.49.2`. `v0.5.0` bleibt gesperrt, bis der
-private Sonic-Adventure-PAL-Integrationstest vollstaendig ueber den nativen
-PC-Pfad spielbar ist. Ein Menue- oder einzelner Gameplay-Meilenstein ist noch
-keine Releaseabnahme.
+Gleichrangige P0-Ziele sind erhaltener Story-/Gameplay-/Savefortschritt,
+stabile originale 30-Hz-Simulation, unabhaengige 144-Hz-Praesentation, ein
+vollstaendiger Kaltexport unter zehn Minuten und kosteneffiziente Umsetzung.
+Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
 
-## Erreichter Produktstand
+## Belegter Fortschritt
 
-- Intro, Hauptmenue, Optionen und Character Select sind erreichbar.
-- Die idle-getriggerte, selbstlaufende Gameplay-Demo laeuft teilweise.
-- Spielersteuerbares Gameplay ist in Station Square und Emerald Coast ueber
-  die nativen Debug-/Szenariopfade erreicht. Sonics regulaeres Story-Intro
-  startet und laedt Titelinhalt, endet aber noch an einer reproduzierbaren
-  Crashfamilie; der Storyfortschritt ist daher nicht abgenommen.
-- Native Event-Voices und der direkte Titel-Inputpfad funktionieren im
-  aktuellen Nutzerlauf. Diese Beobachtung ersetzt weder die Replaymatrix noch
-  die weiterhin offenen Event-/Untertitel- und Crashvertraege.
-- Der r178-Produktbuild verwendet bereits das vollstaendige
-  Performanceprofil (`/O2 /Ob2`). Die im Gameplay weiter beobachtete
-  Unter-Echtzeitgeschwindigkeit ist daher ein Runtime-/AOT-/Geometrie-P0 und
-  kein erklaertes `/O1 /Ob0`-Bring-up-Artefakt.
-- Wiederverwendete, ausreichend grosse Object-Space-BasicAttach-Geometrie
-  besitzt im privaten Titelpfad nun einen bounded, identity- und
-  generation-gebundenen Persistent-Meshcache. Dynamische, geclippte, kleine
-  und diagnostisch aufgezeichnete Draws bleiben transient; die reale
-  Produkt-Hitquote ist im naechsten normalen Build zu messen.
-- Der zuvor gemeinsame Grafik-Contract-Stop ist geschlossen.
-- Der erreichte Gameplaypfad besitzt weiterhin deutlich sichtbare
-  Grafikfehler und deckt neue Callback-/AOT- sowie Providerauftraege auf.
-- Automatisierte Produktlaeufe laufen standardmaessig stumm und unsichtbar.
-- Schwere Dauertelemetrie ist aus dem Standardprofil ausgeschlossen; sie
-  verlangsamt den realen Lauf zu stark und wird nur gezielt offline eingesetzt.
+- Intro, Hauptmenue, Character Select und regulaerer Story-Einstieg sind
+  erreichbar. Der Nutzer hat im bisherigen Storypfad Chaos 4 besiegt; danach
+  wurde der naechste Film angefordert. Der fruehere Stand vor dem ersten
+  Story-Intro ist damit ueberholt. Dieser Nutzerlauf bleibt an r315 gebunden.
+- Das Spiel erkennt die VMU-Anbindung. Laden hat Storyfortschritt nach
+  vorherigen Stops wiederhergestellt. Vollstaendige Save-/Quicksave- und
+  Eventfortsetzung in allen Situationen bleibt ein eigenes Abnahmeziel.
+- r316 erhaelt alle 249 gebundenen Loaded-AOT-Module und alle vorherigen
+  Primary-Blockanfaenge. Drei neue private Callbackroots erschliessen weitere
+  1.822 Loaded-AOT-Blockanfaenge in der Flugsequenz-Familie. Das ist
+  Candidate-Fortschritt, keine automatische Proof-Promotion.
+- r316 korrigiert die gemeinsame Objekttexturliste: Das Laden einer
+  Charaktertexturliste darf die vom Main-Owner veroeffentlichte Liste nicht
+  ueberschreiben. Ein begrenzter Produkttrace bestaetigt die korrigierte
+  gemeinsame Bindung. Eine vollstaendige visuelle Objektabnahme folgt daraus
+  nicht.
+- Alle zehn gebundenen Filmdateien sind im privaten Inhalt vorhanden und
+  gegen die Originalquelle geprueft. Die acht Storyfilme wurden mit dem
+  nativen Decoder vollstaendig dekodiert. Das ersetzt nicht ihren Nachweis
+  innerhalb der jeweiligen Spielsequenz.
+- Mit derselben r316-EXE besteht Tails/Casinopolis einen sichtbaren
+  60-Sekunden-Debuglauf. Ein fuenfminuetiger Lauf mit einer Spielstandkopie
+  besteht ohne Crash und zeigt den Zugpfad zwischen Mystic Ruins und Station
+  Square. Die Kopie ist nicht als identischer Vorzustand des Nutzerreplays
+  belegt; der Sky-Chase-Stop wurde in diesem Lauf nicht erreicht.
 
-Private Titeladressen, Disassemblybytes und Retailidentitaeten bleiben im
-externen Spielprojekt und seinen Diagnoseartefakten.
+## Offene Produktfragen
 
-Die Meilensteinskala ist:
+- Sky Chase, Chao Garden und weitere noch nicht erreichte Storyfortsetzungen
+  sind nicht pauschal freigegeben. Ein neuer unbekannter Block endet weiterhin
+  fail-closed; ein fehlender Crashrecord ist kein Beweis fuer Fehlerfreiheit.
+- Untertitel und Rueckblicktexte bleiben zur Abnahme offen. Die neue,
+  standardmaessig ausgeschaltete Diagnose beobachtet Timer, Textqueue,
+  vollstaendige Pixelpuffer und bestehende native Texturansichten. Geaenderte
+  Textpixel bei wiederverwendeter Ansicht werden als Updatefrage untersucht.
+- Itemboxinhalt, einzelne Objektteile, Raketen, Jump Pads und Menuegrafik
+  besitzen weiterhin offene visuelle Befunde. Bestehende Shader-, Tiefen-,
+  Alpha- und Reihenfolgevertraege werden nicht durch pauschale Overrides
+  ersetzt. Die lokale Flycast-Referenz und der originale Datenfluss bleiben
+  Vergleichsbasis.
+- Stabile 30 Simulationsbilder pro Sekunde sind noch nicht durchgehend
+  erreicht. Der r316-Casinopolis-Diagnoselauf liefert rund 24,8 neue Bilder
+  pro Sekunde ueber sein aktives Fenster. Capture und Bindingdiagnostik machen
+  ihn ungeeignet fuer einen sauberen Performancevergleich.
+- r316 benoetigt 637,2 Sekunden im CLI-Export, zusaetzlich zur Wrapper-
+  Vorpruefung. Das ist ein inkrementeller Lauf mit Caches und sieben neuen
+  AOT-Compiles, kein Kaltnachweis. Das Zehn-Minuten-Ziel bleibt verfehlt.
+  Eine geaenderte Deklarationsliste im gemeinsamen Dispatchheader zieht
+  unnoetig unveraenderte Shards in den Build; diese Ursache ist eingegrenzt.
 
-| ID | Produktcheckpoint | Stand |
-| --- | --- | --- |
-| M0 | Intro | erreicht |
-| M1 | Hauptmenue | erreicht |
-| M2 | Character Select | erreicht |
-| M3 | Idle Gameplay Demo | teilweise erreicht |
-| M4 | Sonic Story Intro startet | erreicht, danach Crash |
-| M5 | Sonic Story Intro vollstaendig | offen |
-| M6 | Station Square steuerbar | erreicht ueber Debugpfad |
-| M7 | Emerald Coast Load | erreicht |
-| M8 | Emerald Coast steuerbar | erreicht ueber Szenariopfad |
+## Entwicklungsablauf
 
-## Aktiver Entwicklungsweg
+Verbindlich sind `AGENTS.md`, `NATIVE_BRINGUP_WORKFLOW.md` und
+`NATIVE_PORT_PRODUCT_CONTRACT.md`, unter Vorrang aktueller Nutzeranweisungen.
 
-Verbindlich ist
-[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md):
+1. Aktuelle Witnesses und typisierte Stops nach gemeinsamer Ursache
+   zusammenfassen. Das gesamte gebundene Spiel nach derselben Familie pruefen;
+   aus einer Crashadresse allein entsteht kein Ausfuehrungsrecht.
+2. Generische Regeln bei einem belegten adressunabhaengigen Muster verwenden.
+   Titelbezogene Familien bleiben privat, source-/byte-/imagegebunden und
+   werden in ihrer aktiven Generation validiert. Dynamische Restmengen bleiben
+   offen. Vorhandene Evidence wird wiederverwendet.
+3. Nur konkrete disjunkte Arbeit delegieren. Keine automatische Fleet-
+   Auslastung, doppelten Vollreviews oder Pflicht zum Warten auf unbenutzte
+   Tasks. Der Haupttask finalisiert Approach, Implementierung und Abnahme.
+4. Kompatible Fixes vor einem Performance-Produktbuild buendeln. Reine native
+   Host-/Adapterfehler verwenden den gueltigen AOT-Pack. Neue Roots oder
+   geaenderte AOT-Semantik erfordern die grosse Schleife. Der echte Ninja-Plan
+   begrenzt die neu kompilierten AOT-Dateien vor Compilerstart.
+5. Mit derselben EXE den betroffenen Sonic-Pfad gezielt pruefen: Debuglaeufe
+   hoechstens 60 Sekunden, Storylauf hoechstens fuenf Minuten. Vollmatrizen
+   sind kein Standardgurt; Grafik-/Engineaenderungen koennen begruendete
+   breitere Abdeckung erfordern. Historische Passes behalten ihre Build-ID.
+6. Nach funktionierendem Produkt ohne bekannten Fortschrittsrueckschritt den
+   geprueften Source-Batch lokal committen. Kein Push. Retaildaten,
+   Spielstaende, private Titelvertraege und Buildartefakte bleiben ausserhalb
+   des oeffentlichen Repositorys.
 
-1. Eine neue Analyse erzeugt die autoritative World und den Katana-Taskpool;
-   die feste read-only Fleet klassifiziert dessen erreichbare Frontiers.
-2. Parallel laufen sechs gebundene Replays bis zu ihrem jeweils ersten Stop.
-   Jeder Stop wird als K1 bis K5 klassifiziert und benennt die erste fehlende
-   Spielkenntnis, nicht nur eine Crashsignatur.
-3. Haupttask und Fleet gruppieren Replay- und Frontierbefunde nach gemeinsamer
-   Callback-, Overlay-, AOT-, Provider- oder Semantikursache und priorisieren
-   Story-/Gameplay-Reichweite sowie Multi-Close.
-4. Jeder bereits streng beweisbare Hardware-Owner wird in diesem Batch
-   umgesetzt, auch wenn er erst auf einem spaeteren Replaypfad aktiv wird;
-   Replay-Reichweite bestimmt seine Reihenfolge, nicht seine Aufnahme.
-5. AOT-/Closure-wirksame Cluster kehren nach der gebuendelten Implementierung
-   genau einmal in die grosse Analyse zurueck. Nur vollstaendig bekannte
-   Host-, Adapter- oder Praesentationsfehler bleiben im kleinen Zyklus mit
-   demselben Pack.
+## Implementierter Unterbau und Beweisgrenzen
 
-Evidence folgt
-`Observed -> Candidate -> Proven | RuntimeContract -> Strict Product`.
-Runtime-Witnesses und Disassembly erzeugen gerichtete Beweisauftraege; nur
-reviewte statische beziehungsweise identity-bound Proofs oder ein validierter
-RuntimeContract duerfen Strict schliessen.
-Fuer den Bring-up darf ein reviewter `Candidate` nach unabhaengiger exakter
-Execution-Safety-Pruefung laufen, ohne dadurch zum Proof oder Produktvertrag
-zu werden.
+Der Bring-up-Dispatch validiert aktive vorkompilierte Blockanfaenge gegen
+versiegelte Identitaeten, aktuelle Owner und Generationen, einschliesslich
+Loaded AOT. Native Audio-, Grafik-, Datei-, Eingabe-, Movie- und Saveprovider
+ersetzen belegte Plattformvertraege. Crash Capsules korrelieren unter anderem
+Providerfehler, Kontrollfluss und Loaded-AOT-Identitaet; Rohadressen oder
+Laufzeitbeobachtungen schliessen keine statische Frontier.
 
-## Implementierter Bring-up-Unterbau
-
-- versioniertes, identity-bound Native-Bring-up-Allowlist-Artefakt;
-- sicherer Bring-up-Dispatch ausschliesslich ueber aktive versiegelte
-  residente `primary`-Static-AOT-Bloecke, ohne rohe Hostfunktionszeiger oder
-  Tabellenmutation;
-- stabile Trennung von AOT-Pack und Runtime-/Adapterbuild;
-- kleiner begrenzter Dispatch-Observation-Puffer sowie erzeugter Promotion-
-  und executable-Allowlist-Report;
-- private, exakt byte- und funktionsgebundene Disassembly-Evidence fuer
-  titelbezogene Ziele; generische Regeln nur bei address-agnostischem Muster.
-
-Noch nicht als vollstaendiger Unterbau implementiert sind:
-
-- ModuleInstance-/Lifecycle-Bindung fuer PRS-, Overlay- und Loaded-AOT-
-  Bring-up-Dispatch; solche Records bleiben in v1 nicht executable;
-- ein persistierbarer Runtime-Witness-Ring mit Replay-, Build-, Provider-,
-  Last-Writer- und Callstack-Korrelation;
-- Provider-level Deterministic Replay, das aufgezeichnete Hostantworten und
-  Completion-Reihenfolgen wieder einspeist;
-- automatische First-Divergence-Lokalisierung und Evidence-Promotion. Der
-  vorhandene Replaypfad verifiziert Ereignisstrom und finalen State-Hash,
-  ersetzt diese Funktionen aber noch nicht.
-
-## Naechste Gates
-
-1. Die verbleibenden Crashfamilien der sechs Replaypfade nach gemeinsamer
-   Loaded-AOT-, Objektcallback-, Hardware-Owner- oder Providerursache
-   schliessen; erfolgreiche Fuenf-Minuten-Pfade verlassen die Crashmatrix.
-2. Nach der autoritativen Analyse sofort den neuen Pool an die bestehende
-   Fleet geben und Replay-/Fleetbefunde zu wenigen gemeinsamen
-   Knowledge-Gap-Clustern reconciliieren.
-3. Das hoechstwertige Cluster und alle daneben bereits streng beweisbaren
-   Hardware-Owner vollstaendig schliessen. Parallel bleiben allgemeine
-   Grafiktreue und Runtimeperformance P0: Grafikfixes muessen den authored
-   Material-/Textur-/Lichtvertrag wiedergeben; Performancefixes muessen einen
-   gemessenen AOT-, FPU-, Speicher- oder Geometrie-Hotpath adressieren.
-4. Nach genau einem Export-/Produktbuild dieselben verbleibenden Replays
-   hoechstens fuenf Minuten wiederholen und jeden stabilen Pfad aus der Matrix
-   nehmen. Der naechste Storymeilenstein ist M5: Sonics Intro laeuft
-   vollstaendig in den regulaeren Spielzustand.
-5. Strict wird weiterhin nur auf ausdrueckliche Nutzeranweisung gebaut.
-
-## Quellenhierarchie
-
-Bei Widerspruechen gilt:
-
-1. aktuelle Nutzeranweisung;
-2. `AGENTS.md`;
-3. `NATIVE_BRINGUP_WORKFLOW.md` und
-   `NATIVE_PORT_PRODUCT_CONTRACT.md`;
-4. diese aktuelle Zustandsseite;
-5. Roadmap, Taskkatalog, Handoff und historische Statusabschnitte.
+`Observed -> Candidate -> Proven | RuntimeContract -> Strict Product` bleibt
+die Evidence-Grenze. Eingabereplays sind nur mit gebundenem Vorzustand und
+tatsaechlich beobachtetem Meilenstein ein Reproduktionsnachweis. Vollstaendiges
+deterministisches Provider-Replay, automatische First-Divergence-Lokalisierung
+und universelle Spiel-/Grafikabdeckung sind nicht als fertig abgenommen.
