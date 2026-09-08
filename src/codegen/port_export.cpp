@@ -26616,6 +26616,12 @@ native_disc_returned_receiver_function_outcome_name(
     switch (reason) {
     case Reason::None:
         return "none";
+    case Reason::SourceInstructionMissing:
+        return "source-instruction-missing";
+    case Reason::SourceOpcodeMismatch:
+        return "source-opcode-mismatch";
+    case Reason::SourceControlFlowMismatch:
+        return "source-control-flow-mismatch";
     case Reason::DuplicateBlock:
         return "duplicate-block";
     case Reason::MissingEntryBlock:
@@ -26677,9 +26683,14 @@ make_native_disc_returned_receiver_diagnostic(
     const katana::io::ExecutableImage& image,
     const katana::analysis::ControlFlowAnalysisResult& analysis,
     const std::span<const katana::ir::Function> program,
-    const NativeDiscReturnedReceiverDiagnosticState state) {
+    const NativeDiscReturnedReceiverDiagnosticState state,
+    const katana::analysis::detail::StaticReturnedReceiverInputKind input_kind =
+        katana::analysis::detail::StaticReturnedReceiverInputKind::Fresh) {
     NativeDiscReturnedReceiverDiagnosticReport report;
     report.state = state;
+    report.input_kind = input_kind ==
+        katana::analysis::detail::StaticReturnedReceiverInputKind::RehydrateCurrentSource
+        ? "rehydrate-current-source" : "fresh";
     report.program_functions = program.size();
     report.decoded_instructions = analysis.recursive.instructions.size();
     report.field_sink_contracts = analysis.static_callback_field_sinks.size();
@@ -26692,7 +26703,8 @@ make_native_disc_returned_receiver_diagnostic(
             katana::analysis::detail::discover_static_returned_receiver_contracts(
                 image, program, analysis.recursive.instructions,
                 analysis.static_callback_field_sinks,
-                maximum_native_disc_returned_receiver_work_items);
+                maximum_native_disc_returned_receiver_work_items, input_kind);
+        report.reconstructed_instructions = inventory.reconstructed_instructions;
         report.functions_examined = inventory.functions_examined;
         report.instructions_examined = inventory.instructions_examined;
         report.work_items = inventory.work_items;
@@ -26855,6 +26867,8 @@ std::string serialize_native_disc_returned_receiver_diagnostic(
            << ",\"program_functions\":" << report.program_functions
            << ",\"decoded_instructions\":"
            << report.decoded_instructions
+           << ",\"input_kind\":" << katana::io::quote_json(report.input_kind)
+           << ",\"reconstructed_instructions\":" << report.reconstructed_instructions
            << ",\"field_sink_contracts\":"
            << report.field_sink_contracts
            << ",\"functions_examined\":" << report.functions_examined
@@ -42348,7 +42362,9 @@ try_reuse_native_disc_analysis_artifact(
             make_native_disc_returned_receiver_diagnostic(
                 result.image, result.analysis, result.program,
                 NativeDiscReturnedReceiverDiagnosticState::
-                    ReusedSourceRevalidated);
+                    ReusedSourceRevalidated,
+                katana::analysis::detail::StaticReturnedReceiverInputKind::
+                    RehydrateCurrentSource);
         result.returned_receiver_diagnostic->image_analysis_key =
             result.analysis_artifact_identity.image_analysis_key;
         result.returned_receiver_diagnostic->analysis_artifact_key =

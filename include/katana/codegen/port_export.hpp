@@ -293,6 +293,8 @@ struct NativeDiscReturnedReceiverDiagnosticReport final {
     std::string analysis_artifact_key;
     std::size_t program_functions = 0u;
     std::size_t decoded_instructions = 0u;
+    std::string input_kind = "fresh";
+    std::size_t reconstructed_instructions = 0u;
     std::size_t field_sink_contracts = 0u;
     std::size_t functions_examined = 0u;
     std::size_t instructions_examined = 0u;

@@ -4,9 +4,13 @@
 
 #include "katana/io/executable_image.hpp"
 #include "katana/ir/ir.hpp"
+#include "katana/ir/lower.hpp"
+#include "katana/ir/optimize.hpp"
 #include "katana/sh4/disassembler.hpp"
 
+#include <algorithm>
 #include <array>
+#include <initializer_list>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -1009,6 +1013,116 @@ void test_returned_receiver_tailcall_field_observation() {
 }
 } // namespace
 
+void test_returned_receiver_source_rehydration() {
+    using namespace katana::analysis::detail;
+    using Reason = StaticReturnedReceiverRejectionReason;
+    ReturnedReceiverFixture fixture;
+    fixture.image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    std::vector<std::uint8_t> bytes(0x120u, 0u);
+    const auto block = [&](const std::uint32_t pc,
+                           const std::initializer_list<std::uint16_t> words,
+                           std::vector<std::uint32_t> successors = {}) {
+        std::vector<std::uint8_t> code;
+        for (const auto word : words) {
+            code.push_back(static_cast<std::uint8_t>(word));
+            code.push_back(static_cast<std::uint8_t>(word >> 8u));
+        }
+        std::copy(code.begin(), code.end(), bytes.begin() + (pc - 0x1000u));
+        auto lines = katana::sh4::disassemble(code, pc);
+        katana::ir::BasicBlock result;
+        result.start_address = pc;
+        result.successors = std::move(successors);
+        for (const auto& line : lines)
+            result.instructions.push_back(katana::ir::lower_instruction(line));
+        fixture.decoded_lines.insert(fixture.decoded_lines.end(), lines.begin(), lines.end());
+        return result;
+    };
+    katana::ir::Function producer;
+    producer.entry_address = 0x1000u;
+    producer.direct_callees = {0x2000u};
+    producer.blocks.push_back(block(0x1000u, {0xB7FEu, 0x0009u}, {0x1004u}));
+    // Constant arithmetic creates a real optimization; R2 keeps both returns live.
+    producer.blocks.push_back(block(0x1004u,
+        {0xE17Fu, 0x7101u, 0x6803u, 0x2228u, 0x8903u}, {0x100Eu, 0x1016u}));
+    producer.blocks.push_back(block(0x100Eu, {0x6083u, 0x000Bu, 0x0009u}));
+    producer.blocks.push_back(block(0x1016u, {0xE000u, 0x000Bu, 0x0009u}));
+    fixture.program.push_back(std::move(producer));
+    katana::ir::Function consumer;
+    consumer.entry_address = 0x1100u;
+    consumer.direct_callees = {0x2000u};
+    consumer.indirect_call_sites = {0x1108u};
+    consumer.blocks.push_back(block(0x1100u, {0xB77Eu, 0x0009u}, {0x1104u}));
+    consumer.blocks.push_back(block(0x1104u,
+        {0x6403u, 0x5346u, 0x430Bu, 0x0009u}, {0x110Cu}));
+    consumer.blocks.back().has_indirect_successor = true;
+    consumer.blocks.push_back(block(0x110Cu, {0x000Bu, 0x0009u}));
+    fixture.program.push_back(std::move(consumer));
+    fixture.image.add_segment({".source-rehydration", 0x1000u, 0u, bytes.size(),
+        katana::io::SegmentKind::Mixed, {true, true, true}, std::move(bytes)});
+    const std::array fields{katana::analysis::StaticCallbackFieldSinkContract{
+        0x1100u, 0x1108u, 0x1106u, 24, 4u, true, 1u}};
+    const auto fresh = discover_static_returned_receiver_contracts(
+        fixture.image, fixture.program, fixture.decoded_lines, fields);
+    require(fresh.returned_receivers.size() == 1u &&
+            fresh.returned_receivers.front().optional_null &&
+            fresh.field_candidates.size() == 1u, "Real-opcode fixture lacks expected origins.");
+    const auto optimization = katana::ir::optimize_program(fixture.program);
+    require(optimization.total_changes != 0u, "Rehydration fixture was not optimized.");
+    const auto snapshot = [](const auto& program) {
+        std::vector<std::uint64_t> values;
+        for (const auto& function : program) {
+            values.push_back(function.entry_address);
+            for (const auto& b : function.blocks) {
+                values.push_back(b.start_address);
+                values.insert(values.end(), b.successors.begin(), b.successors.end());
+                for (const auto& i : b.instructions) {
+                    values.insert(values.end(), {i.source_address, i.original_opcode,
+                        static_cast<std::uint64_t>(i.operation), i.destination_register,
+                        i.source_register, i.branch_register,
+                        static_cast<std::uint32_t>(i.immediate),
+                        i.target_address.value_or(0u)});
+                    values.insert(values.end(), i.resolved_targets.begin(), i.resolved_targets.end());
+                }
+            }
+        }
+        return values;
+    };
+    const auto before = snapshot(fixture.program);
+    const auto rebuild = [&](const auto& program, const std::size_t budget = 100000u) {
+        return discover_static_returned_receiver_contracts(
+            fixture.image, program, {}, fields, budget,
+            StaticReturnedReceiverInputKind::RehydrateCurrentSource);
+    };
+    const auto restored = rebuild(fixture.program);
+    require(restored.returned_receivers == fresh.returned_receivers &&
+            restored.field_candidates == fresh.field_candidates &&
+            restored.reconstructed_instructions != 0u &&
+            snapshot(fixture.program) == before, "Rehydration changed origins or archived IR.");
+    const auto rejects = [&](const auto& program, const Reason reason) {
+        const auto result = rebuild(program);
+        require(result.returned_receivers.empty() &&
+                result.function_diagnostics.front().rejection_reason == reason,
+                "Source rehydration did not reject the malformed retained function.");
+    };
+    auto drift = fixture.program;
+    drift.front().blocks.front().instructions.front().original_opcode ^= 1u;
+    rejects(drift, Reason::SourceOpcodeMismatch);
+    auto missing_slot = fixture.program;
+    missing_slot.front().blocks.front().instructions.pop_back();
+    rejects(missing_slot, Reason::InvalidDelaySlot);
+    auto missing_block = fixture.program;
+    missing_block.front().blocks.erase(missing_block.front().blocks.begin() + 3);
+    rejects(missing_block, Reason::SuccessorMissing);
+    auto wrong_successor = fixture.program;
+    wrong_successor.front().blocks.front().successors = {0x100Eu};
+    rejects(wrong_successor, Reason::SourceControlFlowMismatch);
+    const auto exhausted = rebuild(fixture.program, 1u);
+    require(exhausted.truncated && exhausted.returned_receivers.empty() &&
+            exhausted.reconstructed_instructions == 0u &&
+            exhausted.function_diagnostics.front().rejection_reason == Reason::WorkBudget,
+            "Rehydration exceeded its shared budget.");
+}
+
 int main() {
     try {
         test_positive_and_fpu_preservation();
@@ -1018,6 +1132,7 @@ int main() {
         test_returned_receiver_jsr_abi_and_delay();
         test_returned_receiver_budget_and_unknown_abi();
         test_returned_receiver_tailcall_field_observation();
+        test_returned_receiver_source_rehydration();
         std::cout << "Return/Object-Callback-Diagnose erfolgreich.\n";
         return 0;
     } catch (const std::exception& error) {

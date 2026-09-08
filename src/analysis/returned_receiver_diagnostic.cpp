@@ -1,6 +1,8 @@
 #include "returned_receiver_diagnostic.hpp"
 
 #include "katana/analysis/value_analysis.hpp"
+#include "katana/ir/lower.hpp"
+#include "katana/sh4/decoder.hpp"
 
 #include <algorithm>
 #include <array>
@@ -602,6 +604,145 @@ void note_returned_receiver_rejection(
     result.rejection_instruction_address = instruction_address;
 }
 
+// Reconstruct only retained sites. This view is never returned to the archive,
+// emitter or discovery pipeline, and missing edges do not authorize more decode.
+[[nodiscard]] bool rehydrate_returned_receiver_function(
+    const katana::io::ExecutableImage& image,
+    const katana::ir::Function& archived,
+    const std::size_t instruction_count,
+    katana::ir::Function& rebuilt,
+    std::vector<katana::sh4::DisassemblyLine>& lines,
+    ReturnedDecodedLineIndex& index,
+    ReturnedReceiverWorkBudget& budget,
+    std::size_t& reconstructed,
+    ReturnedReceiverFunctionResult& failure) {
+    using Reason = StaticReturnedReceiverRejectionReason;
+    const auto reject = [&](const Reason reason, const std::uint32_t block,
+                            const std::uint32_t pc) {
+        failure.complete = false;
+        note_returned_receiver_rejection(failure, reason, block, pc);
+        return false;
+    };
+    // Charge before allocating/copying the temporary instruction view.
+    if (!budget.charge(instruction_count)) {
+        failure.truncated = true;
+        return reject(Reason::WorkBudget, archived.entry_address, archived.entry_address);
+    }
+    const auto metadata_budget = [&]() {
+        if (!budget.charge(archived.blocks.size()) ||
+            !budget.charge(archived.direct_callees.size()) ||
+            !budget.charge(archived.indirect_call_sites.size())) return false;
+        for (const auto& block : archived.blocks) {
+            if (!budget.charge(block.successors.size()) ||
+                !budget.charge(block.guarded_case_ownership_targets.size())) return false;
+            for (const auto& instruction : block.instructions)
+                if (!budget.charge(instruction.resolved_targets.size())) return false;
+        }
+        return true;
+    };
+    if (!metadata_budget()) {
+        failure.truncated = true;
+        return reject(Reason::WorkBudget, archived.entry_address, archived.entry_address);
+    }
+    rebuilt = archived;
+    lines.reserve(instruction_count);
+    std::set<std::uint32_t> leaders;
+    for (const auto& block : archived.blocks) leaders.insert(block.start_address);
+    for (auto& block : rebuilt.blocks) {
+        bool expect_slot = false;
+        for (auto& instruction : block.instructions) {
+            const auto pc = instruction.source_address;
+            const auto* segment = image.find_segment(pc, 2u);
+            const auto offset = segment != nullptr ? segment->byte_offset(pc)
+                                                  : std::optional<std::size_t>{};
+            if ((pc & 1u) != 0u || segment == nullptr || !segment->permissions.executable ||
+                !offset || *offset > segment->bytes.size() ||
+                segment->bytes.size() - *offset < 2u)
+                return reject(Reason::SourceInstructionMissing, block.start_address, pc);
+            const auto opcode = static_cast<std::uint16_t>(
+                segment->bytes[*offset] | (segment->bytes[*offset + 1u] << 8u));
+            if (opcode != instruction.original_opcode)
+                return reject(Reason::SourceOpcodeMismatch, block.start_address, pc);
+            katana::sh4::DisassemblyLine line;
+            line.address = pc;
+            line.opcode = opcode;
+            line.instruction = katana::sh4::decode(opcode);
+            if (!line.instruction.is_known())
+                return reject(Reason::DecodedInstructionUnknown, block.start_address, pc);
+            line.target_address = katana::sh4::calculate_direct_branch_target(line.instruction, pc);
+            line.is_delay_slot = expect_slot;
+            auto raw = katana::ir::lower_instruction(line);
+            if (raw.delay_slot.role != instruction.delay_slot.role ||
+                raw.delay_slot.counterpart_address != instruction.delay_slot.counterpart_address ||
+                (expect_slot && line.instruction.changes_control_flow()))
+                return reject(Reason::DelaySlotMismatch, block.start_address, pc);
+            expect_slot = !expect_slot && line.instruction.has_delay_slot;
+            // These annotations were source-revalidated by the archive caller.
+            // Never attach them to a transformed branch register/operation.
+            if (raw.operation == instruction.operation &&
+                raw.original_operation == instruction.original_operation &&
+                raw.branch_register == instruction.branch_register &&
+                raw.branch_register_relative == instruction.branch_register_relative) {
+                raw.resolved_targets = instruction.resolved_targets;
+                raw.dynamic_target_class = instruction.dynamic_target_class;
+            }
+            const auto found = index.lines.find(pc);
+            if (found != index.lines.end()) {
+                if (found->second->opcode != opcode ||
+                    found->second->is_delay_slot != line.is_delay_slot)
+                    return reject(Reason::DelaySlotMismatch, block.start_address, pc);
+            } else {
+                lines.push_back(std::move(line));
+                index.lines.emplace(pc, &lines.back());
+            }
+            instruction = std::move(raw);
+            ++reconstructed;
+        }
+        if (expect_slot)
+            return reject(Reason::InvalidDelaySlot, block.start_address,
+                          block.instructions.back().source_address);
+        if (block.instructions.empty()) continue; // Existing typed structural check.
+        const auto& last = block.instructions.back();
+        const auto terminal_index = last.delay_slot.role == katana::ir::DelaySlotRole::Slot
+            ? block.instructions.size() - 2u : block.instructions.size() - 1u;
+        const auto& terminal = block.instructions[terminal_index];
+        using O = katana::ir::Operation;
+        std::vector<std::uint32_t> expected;
+        const bool branch = terminal.operation == O::Branch;
+        const bool conditional = terminal.operation == O::BranchIfTrue ||
+                                 terminal.operation == O::BranchIfFalse;
+        const bool returns = terminal.operation == O::Return;
+        const bool indirect_tail = terminal.operation == O::JumpRegister;
+        if (branch || conditional) {
+            if (!terminal.target_address)
+                return reject(Reason::SourceControlFlowMismatch, block.start_address,
+                              terminal.source_address);
+            expected.push_back(*terminal.target_address);
+        }
+        if (!branch && !returns && !indirect_tail) {
+            if (last.source_address > std::numeric_limits<std::uint32_t>::max() - 2u)
+                return reject(Reason::SourceControlFlowMismatch, block.start_address,
+                              last.source_address);
+            expected.push_back(last.source_address + 2u);
+        }
+        if (!indirect_tail) {
+            auto actual = block.successors;
+            std::sort(expected.begin(), expected.end());
+            expected.erase(std::unique(expected.begin(), expected.end()), expected.end());
+            std::sort(actual.begin(), actual.end());
+            const bool indirect_call = terminal.operation == O::CallRegister;
+            if (expected != actual || block.has_indirect_successor != indirect_call)
+                return reject(Reason::SourceControlFlowMismatch, block.start_address,
+                              terminal.source_address);
+            for (const auto successor : expected)
+                if (!leaders.contains(successor))
+                    return reject(Reason::SuccessorMissing, block.start_address,
+                                  terminal.source_address);
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] ReturnedReceiverFunctionResult analyze_returned_receiver_function(
     const katana::io::ExecutableImage& image,
     const katana::ir::Function& function,
@@ -1169,7 +1310,8 @@ StaticReturnedReceiverInventory discover_static_returned_receiver_contracts(
     const std::span<const katana::ir::Function> program,
     const std::span<const katana::sh4::DisassemblyLine> decoded_lines,
     const std::span<const StaticCallbackFieldSinkContract> field_sink_contracts,
-    const std::size_t maximum_work_items) {
+    const std::size_t maximum_work_items,
+    const StaticReturnedReceiverInputKind input_kind) {
     StaticReturnedReceiverInventory inventory;
     inventory.work_budget = maximum_work_items;
     ReturnedReceiverWorkBudget work_budget{maximum_work_items};
@@ -1242,8 +1384,23 @@ StaticReturnedReceiverInventory discover_static_returned_receiver_contracts(
                 ? nullptr
                 : &*field_begin,
             static_cast<std::size_t>(field_end - field_begin));
-        const auto result = analyze_returned_receiver_function(
-            image, function, decoded_index, function_fields, work_budget);
+        ReturnedReceiverFunctionResult result;
+        if (input_kind == StaticReturnedReceiverInputKind::RehydrateCurrentSource) {
+            const auto before = work_budget.consumed;
+            katana::ir::Function rebuilt;
+            std::vector<katana::sh4::DisassemblyLine> lines;
+            ReturnedDecodedLineIndex rebuilt_index;
+            result.field_observations.resize(function_fields.size());
+            if (rehydrate_returned_receiver_function(
+                    image, function, function_instruction_count, rebuilt, lines,
+                    rebuilt_index, work_budget, inventory.reconstructed_instructions, result))
+                result = analyze_returned_receiver_function(
+                    image, rebuilt, rebuilt_index, function_fields, work_budget);
+            result.work_items = work_budget.consumed - before;
+        } else {
+            result = analyze_returned_receiver_function(
+                image, function, decoded_index, function_fields, work_budget);
+        }
         inventory.work_items = work_budget.consumed;
         inventory.truncated = inventory.truncated || result.truncated;
         if (!result.complete) ++inventory.incomplete_functions;

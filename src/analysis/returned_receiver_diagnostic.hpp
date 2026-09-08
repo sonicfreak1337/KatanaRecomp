@@ -61,6 +61,9 @@ enum class StaticReturnedReceiverFunctionOutcome : std::uint8_t {
 
 enum class StaticReturnedReceiverRejectionReason : std::uint8_t {
     None,
+    SourceInstructionMissing,
+    SourceOpcodeMismatch,
+    SourceControlFlowMismatch,
     DuplicateBlock,
     MissingEntryBlock,
     EmptyBlock,
@@ -115,9 +118,15 @@ struct StaticReturnedReceiverInventory final {
     std::size_t work_items = 0u;
     std::size_t work_budget = 0u;
     std::size_t incomplete_functions = 0u;
+    std::size_t reconstructed_instructions = 0u;
     bool truncated = false;
 
     bool operator==(const StaticReturnedReceiverInventory&) const = default;
+};
+
+enum class StaticReturnedReceiverInputKind : std::uint8_t {
+    Fresh,
+    RehydrateCurrentSource,
 };
 
 // Finds only complete, finite return summaries whose reachable returns are
@@ -132,6 +141,7 @@ discover_static_returned_receiver_contracts(
     std::span<const katana::sh4::DisassemblyLine> decoded_lines,
     std::span<const katana::analysis::StaticCallbackFieldSinkContract>
         field_sink_contracts,
-    std::size_t maximum_work_items = 16u * 1024u * 1024u);
+    std::size_t maximum_work_items = 16u * 1024u * 1024u,
+    StaticReturnedReceiverInputKind input_kind = StaticReturnedReceiverInputKind::Fresh);
 
 } // namespace katana::analysis::detail
