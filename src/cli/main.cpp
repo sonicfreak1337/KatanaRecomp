@@ -1367,6 +1367,41 @@ int audit_latent_aot_module_cli(
     write_offsets(audit.discovery_after_nonroot_filter_offsets);
     std::cout << ",\"referenced_block_entry_offsets\":";
     write_offsets(audit.referenced_block_entry_offsets);
+    std::cout << ",\"return_object_callback_candidates\":[";
+    for (std::size_t index = 0u;
+         index < audit.return_object_callback_candidates.size(); ++index) {
+        if (index != 0u) std::cout << ',';
+        const auto& candidate = audit.return_object_callback_candidates[index];
+        std::cout << "{\"function_address\":"
+                  << candidate.function_address
+                  << ",\"block_address\":" << candidate.block_address
+                  << ",\"call_instruction_address\":"
+                  << candidate.call_instruction_address
+                  << ",\"callee_address\":" << candidate.callee_address
+                  << ",\"return_register\":"
+                  << static_cast<unsigned>(candidate.return_register)
+                  << ",\"object_register\":"
+                  << static_cast<unsigned>(candidate.object_register)
+                  << ",\"literal_address\":"
+                  << candidate.literal_address
+                  << ",\"literal_value\":" << candidate.literal_value
+                  << ",\"store_instruction_address\":"
+                  << candidate.store_instruction_address
+                  << ",\"field_displacement\":"
+                  << candidate.field_displacement
+                  << ",\"target_address\":" << candidate.target_address
+                  << ",\"target_shape_valid\":"
+                  << (candidate.target_shape_valid ? "true" : "false")
+                  << ",\"complete\":"
+                  << (candidate.complete ? "true" : "false")
+                  << ",\"strict_eligible\":"
+                  << (candidate.strict_eligible ? "true" : "false")
+                  << ",\"execution_eligible\":"
+                  << (candidate.execution_eligible ? "true" : "false")
+                  << ",\"reason\":"
+                  << katana::io::quote_json(candidate.reason) << '}';
+    }
+    std::cout << ']';
     std::cout << ",\"loader_tail_diagnostics\":[";
     for (std::size_t index = 0u;
          index < audit.loader_tail_diagnostics.size(); ++index) {

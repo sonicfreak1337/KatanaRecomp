@@ -362,6 +362,8 @@ list(
     "include/katana/analysis/hardware_audit.hpp"
     "include/katana/sh4/isa_coverage.hpp"
     "src/analysis/hardware_audit.cpp"
+    "src/analysis/return_object_callback_inventory.cpp"
+    "src/analysis/return_object_callback_inventory.hpp"
     "src/decoder/isa_coverage.cpp"
 )
 list(
@@ -382,6 +384,8 @@ set(
     "src/codegen/latent_aot_registry.cpp"
     "src/codegen/native_disc_analysis_artifact.cpp"
     "src/analysis/hardware_audit.cpp"
+    "src/analysis/return_object_callback_inventory.cpp"
+    "src/analysis/return_object_callback_inventory.hpp"
 )
 set(
     KATANA_ANALYSIS_CACHE_IDENTITY_REGIONS
@@ -1232,6 +1236,7 @@ add_library(katana_core_objects OBJECT
     src/analysis/function_analysis.cpp
     src/analysis/function_value_analysis.cpp
     src/analysis/hardware_audit.cpp
+    src/analysis/return_object_callback_inventory.cpp
     src/analysis/owner_semantic_summary.cpp
     src/analysis/native_provider_equivalence.cpp
     src/analysis/executable_inventory.cpp
@@ -3375,6 +3380,17 @@ katana_enable_warnings(katana-hardware-audit-tests)
 add_test(
     NAME katana-hardware-audit-tests
     COMMAND katana-hardware-audit-tests
+)
+
+add_executable(
+    katana-return-object-callback-inventory-tests
+    tests/analysis/return_object_callback_inventory_tests.cpp
+)
+target_link_libraries(katana-return-object-callback-inventory-tests PRIVATE katana_core)
+katana_enable_warnings(katana-return-object-callback-inventory-tests)
+add_test(
+    NAME katana-return-object-callback-inventory-tests
+    COMMAND katana-return-object-callback-inventory-tests
 )
 
 add_executable(katana-hardware-audit-policy-tests

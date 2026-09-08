@@ -23,6 +23,7 @@
 #include "katana/sh4/decoder.hpp"
 
 #include "../runtime/prs_decode.hpp"
+#include "../analysis/return_object_callback_inventory.hpp"
 #include "../analysis/static_callback_inventory.hpp"
 #include "../analysis/guarded_native_entry_shape.hpp"
 
@@ -8681,6 +8682,30 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
             discovery_program =
                 katana::ir::lower_program(analysis, safepoints);
             if (module_audit != nullptr) {
+                // This is a diagnostic-only lane.  It consumes the same
+                // decoded CFA lines and lowered program as discovery, but its
+                // unproven return/object observations never become roots,
+                // closure inputs, or execution authority.
+                try {
+                    katana::analysis::detail::GuardedNativeEntryShapeCache
+                        native_entry_shapes(image);
+                    const auto return_object_candidates =
+                        katana::analysis::detail::
+                            discover_return_object_callback_candidates(
+                                image, analysis.recursive.instructions,
+                                discovery_program, native_entry_shapes);
+                    module_audit->return_object_callback_candidates.insert(
+                        module_audit->return_object_callback_candidates.end(),
+                        return_object_candidates.begin(),
+                        return_object_candidates.end());
+                } catch (const std::bad_alloc&) {
+                    throw;
+                } catch (const std::exception&) {
+                    // Diagnostics are best-effort and must not change the
+                    // admitted graph or make a valid module fail closed.
+                }
+            }
+            if (module_audit != nullptr) {
                 const auto audit_resolver = make_latent_code_address_resolver(
                     candidate, discovery_program,
                     options.external_code_targets);
@@ -10860,6 +10885,25 @@ LatentAotModuleAuditResult audit_latent_aot_module_impl(
                                left.status == right.status;
                     }),
         result.loader_tail_diagnostics.end());
+    std::sort(
+        result.return_object_callback_candidates.begin(),
+        result.return_object_callback_candidates.end(),
+        [](const auto& left, const auto& right) {
+            return std::tie(left.function_address, left.block_address,
+                            left.call_instruction_address, left.callee_address,
+                            left.literal_address, left.literal_value,
+                            left.store_instruction_address,
+                            left.field_displacement, left.target_address) <
+                   std::tie(right.function_address, right.block_address,
+                            right.call_instruction_address, right.callee_address,
+                            right.literal_address, right.literal_value,
+                            right.store_instruction_address,
+                            right.field_displacement, right.target_address);
+        });
+    result.return_object_callback_candidates.erase(
+        std::unique(result.return_object_callback_candidates.begin(),
+                    result.return_object_callback_candidates.end()),
+        result.return_object_callback_candidates.end());
     return result;
 }
 

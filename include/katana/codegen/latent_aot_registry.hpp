@@ -387,6 +387,33 @@ struct LatentAotLoaderTailAuditDiagnostic {
         LatentAotLoaderTailAuditStatus::RootFunctionMissing;
 };
 
+// Diagnostic-only evidence for a direct call whose return value is copied into
+// an object-looking base register before a PC-relative callback literal is
+// stored into a field.  This is intentionally a separate type from the
+// executable guarded-code inventory: a direct callee return does not prove
+// heap ownership, object lifetime, or the callback receiver ABI.
+struct LatentAotReturnObjectCallbackCandidate final {
+    std::uint32_t function_address = 0u;
+    std::uint32_t block_address = 0u;
+    std::uint32_t call_instruction_address = 0u;
+    std::uint32_t callee_address = 0u;
+    std::uint8_t return_register = 0u;
+    std::uint8_t object_register = 0u;
+    std::uint32_t literal_address = 0u;
+    std::uint32_t literal_value = 0u;
+    std::uint32_t store_instruction_address = 0u;
+    std::int32_t field_displacement = 0;
+    std::uint32_t target_address = 0u;
+    bool target_shape_valid = false;
+    bool complete = false;
+    bool strict_eligible = false;
+    bool execution_eligible = false;
+    std::string reason{"return-object-alias-unproven"};
+
+    [[nodiscard]] bool operator==(
+        const LatentAotReturnObjectCallbackCandidate&) const = default;
+};
+
 struct LatentAotModuleAuditResult {
     std::string byte_identity;
     std::uint32_t byte_size = 0u;
@@ -425,6 +452,10 @@ struct LatentAotModuleAuditResult {
     std::vector<std::uint32_t> discovery_before_cfg_filter_offsets;
     std::vector<std::uint32_t> discovery_after_cfg_filter_offsets;
     std::vector<std::uint32_t> discovery_after_nonroot_filter_offsets;
+    // Diagnostic-only direct-return/object-alias observations.  These values
+    // never seed CFA, closure, AOT, Strict, or runtime execution.
+    std::vector<LatentAotReturnObjectCallbackCandidate>
+        return_object_callback_candidates;
 };
 
 // Audits retain their historical RuntimeOnly default. Explicit strict
