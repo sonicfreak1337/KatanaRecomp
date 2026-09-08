@@ -367,6 +367,158 @@ ArithmeticResult<Float> calculate_binary(const CpuState& cpu,
                                 delay_owner);
 }
 
+struct SingleBinaryResult {
+    std::uint32_t bits = 0u;
+    std::uint32_t causes = 0u;
+};
+
+[[nodiscard]] bool try_normal_single_product(const std::uint32_t n,
+                                              const std::uint32_t m,
+                                              const std::uint8_t rounding_mode,
+                                              SingleBinaryResult& result) noexcept {
+    const auto n_exponent = (n >> 23u) & 0xFFu;
+    const auto m_exponent = (m >> 23u) & 0xFFu;
+    if (n_exponent == 0xFFu || m_exponent == 0xFFu) return false;
+    if (n_exponent == 0u || m_exponent == 0u) {
+        if ((n_exponent == 0u && (n & 0x7FFFFFu) != 0u) ||
+            (m_exponent == 0u && (m & 0x7FFFFFu) != 0u)) return false;
+        result = {(n ^ m) & 0x80000000u, 0u};
+        return true;
+    }
+    // Two 24-bit significands have an exact 48-bit product. Derive rounding
+    // and Inexact from the discarded integer bits, avoiding an MXCSR
+    // save/clear/read sequence for the common finite FMUL used by NINJA math.
+    const auto product = std::uint64_t((n & 0x7FFFFFu) | 0x800000u) *
+                         std::uint64_t((m & 0x7FFFFFu) | 0x800000u);
+    const auto normalization = static_cast<std::uint32_t>(product >> 47u);
+    auto exponent = static_cast<std::int32_t>(n_exponent + m_exponent) -
+                    127 + static_cast<std::int32_t>(normalization);
+    // Boundary results retain the complete existing overflow/underflow path,
+    // including its tininess and FPSCR.DN rules.
+    if (exponent <= 0 || exponent >= 254) return false;
+    const auto shift = 23u + normalization;
+    const auto remainder = product & ((std::uint64_t{1} << shift) - 1u);
+    auto significand = static_cast<std::uint32_t>(product >> shift);
+    if (rounding_mode != 1u) {
+        const auto halfway = std::uint64_t{1} << (shift - 1u);
+        significand += remainder > halfway ||
+                       (remainder == halfway && (significand & 1u) != 0u);
+    }
+    if (significand == 0x1000000u) {
+        significand >>= 1u;
+        ++exponent;
+    }
+    result.bits = ((n ^ m) & 0x80000000u) |
+                  (static_cast<std::uint32_t>(exponent) << 23u) |
+                  (significand & 0x7FFFFFu);
+    result.causes = remainder != 0u ? fpscr_cause_inexact_mask : 0u;
+    return true;
+}
+
+[[nodiscard]] bool try_normal_single_sum(std::uint32_t n, std::uint32_t m,
+                                          const bool subtract,
+                                          const std::uint8_t rounding_mode,
+                                          SingleBinaryResult& result) noexcept {
+    auto n_magnitude = n & 0x7FFFFFFFu;
+    auto m_magnitude = m & 0x7FFFFFFFu;
+    if (n_magnitude >= 0x7F800000u || m_magnitude >= 0x7F800000u ||
+        (n_magnitude != 0u && n_magnitude < 0x00800000u) ||
+        (m_magnitude != 0u && m_magnitude < 0x00800000u))
+        return false;
+    if (subtract) m ^= 0x80000000u;
+    if (n_magnitude == 0u || m_magnitude == 0u) {
+        result = {n_magnitude != 0u ? n : m_magnitude != 0u ? m : n & m, 0u};
+        return true;
+    }
+    if (n_magnitude < m_magnitude) {
+        std::swap(n, m);
+        std::swap(n_magnitude, m_magnitude);
+    }
+    auto exponent = static_cast<std::int32_t>(n_magnitude >> 23u);
+    const auto distance = (n_magnitude >> 23u) - (m_magnitude >> 23u);
+    const auto large = ((n & 0x7FFFFFu) | 0x800000u) << 3u;
+    auto small = ((m & 0x7FFFFFu) | 0x800000u) << 3u;
+    // Three rounding bits plus a jammed sticky bit retain every distinction
+    // needed by nearest-even and toward-zero, even for a very small addend.
+    if (distance >= 32u) small = 1u;
+    else if (distance != 0u)
+        small = (small >> distance) |
+                ((small & ((std::uint32_t{1} << distance) - 1u)) != 0u);
+    std::uint32_t extended = 0u;
+    if (((n ^ m) & 0x80000000u) == 0u) {
+        extended = large + small;
+        if ((extended & 0x08000000u) != 0u) {
+            extended = (extended >> 1u) | (extended & 1u);
+            ++exponent;
+        }
+    } else {
+        extended = large - small;
+        if (extended == 0u) {
+            result = {}; // Equal opposite finite operands produce positive zero.
+            return true;
+        }
+        const auto normalization = std::countl_zero(extended) - 5;
+        extended <<= normalization;
+        exponent -= normalization;
+    }
+    // Keep subnormal, overflow and boundary-rounding semantics on the
+    // existing complete path. No guest state has been changed here.
+    if (exponent <= 0 || exponent >= 254) return false;
+    const auto remainder = extended & 7u;
+    auto significand = extended >> 3u;
+    if (rounding_mode != 1u)
+        significand += remainder > 4u ||
+                       (remainder == 4u && (significand & 1u) != 0u);
+    if (significand == 0x1000000u) {
+        significand >>= 1u;
+        ++exponent;
+    }
+    result.bits = (n & 0x80000000u) |
+                  (static_cast<std::uint32_t>(exponent) << 23u) |
+                  (significand & 0x7FFFFFu);
+    result.causes = remainder != 0u ? fpscr_cause_inexact_mask : 0u;
+    return true;
+}
+
+[[nodiscard]] bool try_normal_single_quotient(const std::uint32_t n,
+                                               const std::uint32_t m,
+                                               const std::uint8_t rounding_mode,
+                                               SingleBinaryResult& result) noexcept {
+    const auto n_exponent = (n >> 23u) & 0xFFu;
+    const auto m_exponent = (m >> 23u) & 0xFFu;
+    if (n_exponent == 0xFFu || m_exponent == 0u || m_exponent == 0xFFu)
+        return false;
+    if (n_exponent == 0u) {
+        if ((n & 0x7FFFFFu) != 0u) return false;
+        result = {(n ^ m) & 0x80000000u, 0u};
+        return true;
+    }
+    const auto numerator = (n & 0x7FFFFFu) | 0x800000u;
+    const auto denominator = (m & 0x7FFFFFu) | 0x800000u;
+    const auto normalization = static_cast<unsigned>(numerator < denominator);
+    auto exponent = static_cast<std::int32_t>(n_exponent) -
+                    static_cast<std::int32_t>(m_exponent) + 127 -
+                    static_cast<std::int32_t>(normalization);
+    if (exponent <= 0 || exponent >= 254) return false;
+    const auto dividend = std::uint64_t(numerator) << (26u + normalization);
+    auto extended = static_cast<std::uint32_t>(dividend / denominator);
+    extended |= (dividend % denominator) != 0u;
+    const auto remainder = extended & 7u;
+    auto significand = extended >> 3u;
+    if (rounding_mode != 1u)
+        significand += remainder > 4u ||
+                       (remainder == 4u && (significand & 1u) != 0u);
+    if (significand == 0x1000000u) {
+        significand >>= 1u;
+        ++exponent;
+    }
+    result.bits = ((n ^ m) & 0x80000000u) |
+                  (static_cast<std::uint32_t>(exponent) << 23u) |
+                  (significand & 0x7FFFFFu);
+    result.causes = remainder != 0u ? fpscr_cause_inexact_mask : 0u;
+    return true;
+}
+
 template <typename Float> std::uint32_t truncate_to_integer_bits(const Float value) noexcept {
     if (std::isnan(value) ||
         value <= static_cast<Float>(std::numeric_limits<std::int32_t>::min())) {
@@ -587,10 +739,30 @@ void fpu_binary(CpuState& cpu,
 bool fpu_binary(CpuState& cpu, const FpuBinaryOperation operation,
                 const std::uint8_t source, const std::uint8_t destination,
                 const std::optional<std::uint32_t> delay_owner) noexcept {
-    const ScopedHostRounding rounding(cpu);
-    clear_fpu_causes(cpu);
     constexpr auto conservative = fpscr_enable_overflow_mask |
                                   fpscr_enable_underflow_mask | fpscr_enable_inexact_mask;
+    SingleBinaryResult fast_result;
+    bool fast = false;
+    if (!double_precision(cpu)) {
+        const auto n = cpu.fr[destination & 0x0Fu];
+        const auto m = cpu.fr[source & 0x0Fu];
+        if (operation == FpuBinaryOperation::Multiply)
+            fast = try_normal_single_product(n, m, guest_rounding_mode(cpu), fast_result);
+        else if (operation == FpuBinaryOperation::Add ||
+                 operation == FpuBinaryOperation::Subtract)
+            fast = try_normal_single_sum(n, m, operation == FpuBinaryOperation::Subtract,
+                                        guest_rounding_mode(cpu), fast_result);
+        else if (operation == FpuBinaryOperation::Divide)
+            fast = try_normal_single_quotient(n, m, guest_rounding_mode(cpu), fast_result);
+    }
+    if (fast) {
+        clear_fpu_causes(cpu);
+        if (finish_arithmetic(cpu, fast_result.causes, conservative, delay_owner)) return true;
+        cpu.fr[destination & 0x0Fu] = fast_result.bits;
+        return false;
+    }
+    const ScopedHostRounding rounding(cpu);
+    clear_fpu_causes(cpu);
     if (double_precision(cpu)) {
         const auto result = calculate_binary(cpu, operation, read_dr_double(cpu, destination),
                                               read_dr_double(cpu, source));

@@ -72,6 +72,26 @@ void test_precise_arithmetic() {
         {Op::Add, 0x3f800000u, 0x3f800000u, fpscr_enable_overflow_mask, 0u, 0u, true},
         {Op::Add, 0x3f800000u, 0x3f800000u, fpscr_enable_underflow_mask, 0u, 0u, true},
         {Op::Subtract, 0x3f800000u, 0x3f800000u, fpscr_enable_inexact_mask, 0u, 0u, true},
+        // NINJA's normal single-precision arithmetic must retain ties,
+        // cancellation, sticky addends and conservative trap semantics.
+        {Op::Multiply, 0x3fc00000u, 0x3f800001u, 0u, fpscr_cause_inexact_mask, 0x3fc00002u, false},
+        {Op::Multiply, 0x3fc00000u, 0x3f800001u, 1u, fpscr_cause_inexact_mask, 0x3fc00001u, false},
+        {Op::Multiply, 0xbfc00000u, 0x3f800001u, 1u, fpscr_cause_inexact_mask, 0xbfc00001u, false},
+        {Op::Multiply, 0x3fa74dffu, 0x3fc3dbb6u, 0u, fpscr_cause_inexact_mask, 0x40000000u, false},
+        {Op::Multiply, 0x3fa74dffu, 0x3fc3dbb6u, 1u, fpscr_cause_inexact_mask, 0x3fffffffu, false},
+        {Op::Multiply, 0x3fc00000u, 0x3f800001u, fpscr_enable_inexact_mask, fpscr_cause_inexact_mask, 0u, true},
+        {Op::Divide, 0x3f800000u, 0x40400000u, 0u, fpscr_cause_inexact_mask, 0x3eaaaaabu, false},
+        {Op::Divide, 0x3f800000u, 0x40400000u, 1u, fpscr_cause_inexact_mask, 0x3eaaaaaau, false},
+        {Op::Divide, 0xbf800000u, 0x40400000u, 1u, fpscr_cause_inexact_mask, 0xbeaaaaaau, false},
+        {Op::Divide, 0x80000000u, 0x3f800000u, 0u, 0u, 0x80000000u, false},
+        {Op::Add, 0x3f800000u, 0x33800000u, 0u, fpscr_cause_inexact_mask, 0x3f800000u, false},
+        {Op::Add, 0x3f800001u, 0x33800000u, 0u, fpscr_cause_inexact_mask, 0x3f800002u, false},
+        {Op::Subtract, 0x3f800000u, 0x00800000u, 0u, fpscr_cause_inexact_mask, 0x3f800000u, false},
+        {Op::Subtract, 0x3f800000u, 0x00800000u, 1u, fpscr_cause_inexact_mask, 0x3f7fffffu, false},
+        {Op::Subtract, 0x3f800001u, 0x3f800000u, 0u, 0u, 0x34000000u, false},
+        {Op::Add, 0x80000000u, 0x80000000u, 0u, 0u, 0x80000000u, false},
+        {Op::Subtract, 0x80000000u, 0x00000000u, 0u, 0u, 0x80000000u, false},
+        {Op::Subtract, 0x80000000u, 0x80000000u, 0u, 0u, 0x00000000u, false},
     };
     for (const auto& test : cases) {
         CpuState cpu;
