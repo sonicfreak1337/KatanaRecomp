@@ -37,6 +37,11 @@ namespace detail {
 void fpu_transform_vector_avx2_fma(const float* matrix,
                                    const float* vector,
                                    float* result) noexcept;
+float fpu_inner_product_avx2_fma(const float* source,
+                                const float* destination) noexcept;
+float fpu_multiply_accumulate_avx2_fma(float first,
+                                      float second,
+                                      float addend) noexcept;
 } // namespace detail
 #endif
 
@@ -1005,7 +1010,11 @@ void fpu_sine_cosine(CpuState& cpu,
     static_cast<void>(fpu_sine_cosine(cpu, destination_even, std::nullopt));
 }
 
-void fpu_inner_product(CpuState& cpu,
+namespace detail {
+
+// Retain the scalar implementation as the non-finite/unsupported-host fallback
+// and an independent numerical oracle for the dispatched vector operations.
+void fpu_inner_product_scalar(CpuState& cpu,
                        const std::uint8_t source_vector,
                        const std::uint8_t destination_vector) noexcept {
     const ScopedHostRounding rounding(cpu);
@@ -1024,7 +1033,7 @@ void fpu_inner_product(CpuState& cpu,
     write_single_result(cpu, static_cast<std::uint8_t>(destination_vector + 3u), result);
 }
 
-void fpu_transform_vector(CpuState& cpu, const std::uint8_t destination_vector) noexcept {
+void fpu_transform_vector_scalar(CpuState& cpu, const std::uint8_t destination_vector) noexcept {
     const ScopedHostRounding rounding(cpu);
     clear_fpu_causes(cpu);
     float vector[4];
@@ -1041,6 +1050,44 @@ void fpu_transform_vector(CpuState& cpu, const std::uint8_t destination_vector) 
             result = std::fma(matrix[column * 4u + row], vector[column], result);
         }
         write_single_result(cpu, static_cast<std::uint8_t>(destination_vector + row), result);
+    }
+}
+
+} // namespace detail
+
+void fpu_inner_product(CpuState& cpu,
+                       const std::uint8_t source_vector,
+                       const std::uint8_t destination_vector) noexcept {
+#if KATANA_RUNTIME_HAS_X86_AVX2_FMA_DISPATCH
+    if (host_avx2_fma_available()) {
+        const ScopedHostRounding rounding(cpu);
+        float source[4];
+        float destination[4];
+        bool finite = true;
+        for (std::uint8_t i = 0u; i < 4u; ++i) {
+            source[i] = read_single_operand(
+                cpu, static_cast<std::uint8_t>(source_vector + i));
+            destination[i] = read_single_operand(
+                cpu, static_cast<std::uint8_t>(destination_vector + i));
+            finite = finite && std::isfinite(source[i]) &&
+                     std::isfinite(destination[i]);
+        }
+        if (finite) {
+            clear_fpu_causes(cpu);
+            write_single_result(
+                cpu, static_cast<std::uint8_t>(destination_vector + 3u),
+                detail::fpu_inner_product_avx2_fma(source, destination));
+            return;
+        }
+    }
+#endif
+    detail::fpu_inner_product_scalar(cpu, source_vector, destination_vector);
+}
+
+void fpu_transform_vector(CpuState& cpu,
+                          const std::uint8_t destination_vector) noexcept {
+    if (!try_fpu_transform_vector_simd(cpu, destination_vector)) {
+        detail::fpu_transform_vector_scalar(cpu, destination_vector);
     }
 }
 
@@ -1083,7 +1130,9 @@ bool try_fpu_transform_vector_simd(
 #endif
 }
 
-void fpu_multiply_accumulate(CpuState& cpu,
+namespace detail {
+
+void fpu_multiply_accumulate_scalar(CpuState& cpu,
                              const std::uint8_t source,
                              const std::uint8_t destination) noexcept {
     const ScopedHostRounding rounding(cpu);
@@ -1093,6 +1142,29 @@ void fpu_multiply_accumulate(CpuState& cpu,
                         std::fma(read_single_operand(cpu, 0u),
                                  read_single_operand(cpu, source),
                                  read_single_operand(cpu, destination)));
+}
+
+} // namespace detail
+
+void fpu_multiply_accumulate(CpuState& cpu,
+                             const std::uint8_t source,
+                             const std::uint8_t destination) noexcept {
+#if KATANA_RUNTIME_HAS_X86_AVX2_FMA_DISPATCH
+    if (host_avx2_fma_available()) {
+        const ScopedHostRounding rounding(cpu);
+        const float first = read_single_operand(cpu, 0u);
+        const float second = read_single_operand(cpu, source);
+        const float addend = read_single_operand(cpu, destination);
+        if (std::isfinite(first) && std::isfinite(second) &&
+            std::isfinite(addend)) {
+            clear_fpu_causes(cpu);
+            write_single_result(cpu, destination,
+                detail::fpu_multiply_accumulate_avx2_fma(first, second, addend));
+            return;
+        }
+    }
+#endif
+    detail::fpu_multiply_accumulate_scalar(cpu, source, destination);
 }
 
 void fpu_compare_equal(CpuState& cpu,

@@ -1,6 +1,6 @@
 # Aktueller Projektstand
 
-Stand: 8. September 2026, r322 gebaut; autonome Performancephase und Levelmatrix laufen. Historische Runs und
+Stand: 9. September 2026, r322-Matrix und sechs gezielte r325-Laeufe abgeschlossen. Historische Runs und
 Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
 Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
 
@@ -144,10 +144,48 @@ Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
   und startet keinen neuen Analyzer- oder Compilerprozess.
 - Der Nutzer hat den Batch geschlossen und anschliessend autonome Builds,
   FPS-Messungen und gesteuerte 60-Sekunden-Leveltests freigegeben. Die aktuelle
-  32er-Matrix verwendet r322, Profil 1, 144-Hz-Anforderung und isolierte Saves.
+  32er-Matrix verwendet r322, Profil 1, sichtbare Ausgabe, 144-Hz-Anforderung
+  und isolierte Saves. 31 Kombinationen bestehen die volle 60-Sekunden-Probe;
+  Sonic Final Egg wechselt nach 58,364 Sekunden den Stage-/Owner-Zustand und
+  besteht das Zeitfenster deshalb nicht. Alle 32 Laeufe bleiben ohne Capsule.
+  Das bestaetigt weder ganze Stages noch spaete Storyfortsetzungen.
+  Die langsamsten vollstaendigen Fenster sind Sonic Twinkle Park (21,90),
+  Knuckles Lost World (22,23), Amy Twinkle Park (22,39), Sonic Windy Valley
+  (24,20), Tails Windy Valley (24,33) und Emerald Coast (24,52 Sim-FPS).
   Danach werden nur betroffene Performance-/Regressionspfade wiederholt.
   Ein spaeterer langsamer Abschnitt in Amys Hot Shelter ist durch den
   anfangs stabilen Debugabschnitt nicht abgenommen.
+- r323 verwendet denselben AOT-Pack und bytegleiche generierte Quellen.
+  Der Mikrobuild kompiliert genau 32 gemessene AOT-Einheiten neu und dauert
+  einschliesslich Produktkopie 126 Sekunden. Keine neue Analyse oder
+  Codegenerierung wird aufgerufen. Ein feinerer exakter Speicherbereichsindex
+  und Clang/ThinLTO fuer die Runtime wurden im Produkt verglichen. r324 kehrt
+  bei identischem AOT-Pack zur MSVC-Runtime zurueck; dieser Mikrobuild dauert
+  96 Sekunden bei null AOT-Compiles. Die Messungen zeigen Gewinne, Verluste
+  und erhebliche Schwankungen bei Wiederholungen derselben EXE. Ein allgemeiner
+  Vorteil des Compilerwechsels ist nicht belegt; MSVC bleibt der Runtime-Default.
+  Die gezielten Speicher-/Alias- und FPU-Tests bestehen; die native Linkpruefung
+  schliesst weiterhin Decoder, Interpreter und historische Geraeteemulation aus.
+- r325 bindet den vorhandenen AVX2/FMA-Matrixpfad in den normalen FTRV-Aufruf
+  ein und ergaenzt hardwaregestuetzte FIPR-/FMAC-Pfade. CPUID/OSXSAVE/XGETBV,
+  Rundungsmodus, Denormalbehandlung und nichtendliche Fallbacks bleiben erhalten.
+  Bitgenaue Vergleiche mit unabhaengigen skalaren Implementierungen bestehen
+  auch fuer Ueberlauf, signed zero, NaN, ueberlappende Register und FPSCR-Flags.
+  Das erhaelt den bisherigen Katana-Rechenvertrag; es behauptet keine neue
+  numerische Gleichheit mit Flycasts abweichender FIPR-/FTRV-Akkumulation.
+  Der kanonische Exportwrapper bietet jetzt einen gebundenen Mikrobuild-Pfad:
+  aktuelles Runtimebuild, eingefrorene Runtime-/ABI-Hashes, bytegleiche
+  generierte Quellen, begrenzter Ninja-Plan und normale native Linkpruefung.
+  Der r325-Produktbuild dauert 51,6 Sekunden bei null AOT-Compiles, ohne neue
+  Analyse. Dies ist ein inkrementeller Nachweis, kein Kaltexport.
+- Alle sechs sichtbaren r325-Wiederholungen bestehen 60 Sekunden ohne Capsule.
+  Gemessene Sim-FPS: Emerald Coast 28,55; Amy Hot Shelter 29,62; Sonic Windy
+  Valley 23,74; Sonic Twinkle Park 21,44; Amy Twinkle Park 22,51; Knuckles
+  Lost World 20,38. Die Praesentation liegt in diesen Fenstern bei 135--143 FPS.
+  Es gibt keinen belegten allgemeinen Leistungspuffer: Der staerkste dauerhaft
+  aktive Thread benoetigt im Mittel etwa 39,7--46,3 ms pro neuem Bild in den
+  vier langsamen Szenen. Thread-Endpunktmessungen beweisen weder P95 noch die
+  exklusive Simulationsarbeit. Amy Hot Shelter bleibt auf den Einstieg begrenzt.
 - Sky Chase, Chao Garden und weitere noch nicht erreichte Storyfortsetzungen
   sind nicht pauschal freigegeben. Ein neuer unbekannter Block endet weiterhin
   fail-closed; ein fehlender Crashrecord ist kein Beweis fuer Fehlerfreiheit.

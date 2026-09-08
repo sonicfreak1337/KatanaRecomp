@@ -19,6 +19,14 @@
 #define KATANA_TEST_HAS_SSE_MXCSR 0
 #endif
 
+// Internal scalar fallbacks remain independent of the public SIMD dispatch.
+// Keep these test-only declarations out of the generated AOT ABI headers.
+namespace katana::runtime::detail {
+void fpu_inner_product_scalar(CpuState&, std::uint8_t, std::uint8_t) noexcept;
+void fpu_transform_vector_scalar(CpuState&, std::uint8_t) noexcept;
+void fpu_multiply_accumulate_scalar(CpuState&, std::uint8_t, std::uint8_t) noexcept;
+} // namespace katana::runtime::detail
+
 namespace {
 
 void require(const bool condition, const std::string& message) {
@@ -162,7 +170,85 @@ void test_precise_arithmetic() {
     }
 }
 
+void test_dispatched_vector_arithmetic() {
+    using namespace katana::runtime;
+    // Signed zero, denormal input/output, cancellation, rounding boundaries,
+    // finite overflow and non-finite fallback, under both RM and DN modes.
+    constexpr std::array<std::uint32_t, 28> boundaries = {
+        0u, 0x80000000u, 1u, 0x80000001u,
+        0x007fffffu, 0x807fffffu, 0x00800000u, 0x80800000u,
+        0x00800001u, 0x3f800000u, 0xbf800000u, 0x3f000000u,
+        0x40000000u, 0xc0000000u, 0x3f800001u, 0x3f7ffffeu,
+        0x33800000u, 0xb3800000u, 0x7f7fffffu, 0xff7fffffu,
+        0x7f000000u, 0xff000000u, 0x7f800000u, 0xff800000u,
+        0x7fc00001u, 0x7f800001u, 0xffbfffffu, 0x3eaaaaabu};
+    std::uint32_t random = 0x93b726adu;
+    CpuState initial;
+    CpuState scalar;
+    CpuState dispatched;
+    const auto reset_outputs = [&]() {
+        for (auto* output : {&scalar, &dispatched}) {
+            output->fr = initial.fr;
+            output->xf = initial.xf;
+            output->fpscr = initial.fpscr;
+            output->fpul = initial.fpul;
+            output->t = initial.t;
+        }
+    };
+    const auto next_bits = [&]() {
+        random ^= random << 13u;
+        random ^= random >> 17u;
+        random ^= random << 5u;
+        return random;
+    };
+    for (std::uint32_t mode = 0u; mode < 4u; ++mode) {
+        for (std::uint32_t iteration = 0u; iteration < 384u; ++iteration) {
+            initial.fpscr = (mode & 1u) |
+                ((mode & 2u) != 0u ? fpscr_dn_mask : 0u) |
+                fpscr_cause_mask | fpscr_flag_mask;
+            initial.t = true;
+            initial.fpul = 0x12345678u;
+            for (std::size_t index = 0u; index < 16u; ++index) {
+                initial.fr[index] = iteration < boundaries.size() * 4u
+                    ? boundaries[(iteration + index * (iteration / boundaries.size())) %
+                                 boundaries.size()]
+                    : next_bits();
+                initial.xf[index] = iteration < boundaries.size() * 4u
+                    ? boundaries[(iteration * 3u + index * 7u) % boundaries.size()]
+                    : next_bits();
+            }
+            const auto compare = [&](const CpuState& scalar,
+                                     const CpuState& dispatched,
+                                     const char* operation) {
+                require(scalar.fr == dispatched.fr &&
+                            scalar.xf == dispatched.xf &&
+                            scalar.fpscr == dispatched.fpscr &&
+                            scalar.fpscr == (initial.fpscr & ~fpscr_cause_mask) &&
+                            dispatched.t == initial.t &&
+                            dispatched.fpul == initial.fpul,
+                        std::string(operation) + " SIMD/Scalar-Differenz bei RM/DN=" +
+                            std::to_string(mode) + ", Fall=" + std::to_string(iteration));
+            };
+            const auto source = static_cast<std::uint8_t>((iteration % 4u) * 4u);
+            const auto destination = static_cast<std::uint8_t>(((iteration / 4u) % 4u) * 4u);
+            reset_outputs();
+            detail::fpu_transform_vector_scalar(scalar, destination);
+            fpu_transform_vector(dispatched, destination);
+            compare(scalar, dispatched, "FTRV");
+            reset_outputs();
+            detail::fpu_inner_product_scalar(scalar, source, destination);
+            fpu_inner_product(dispatched, source, destination);
+            compare(scalar, dispatched, "FIPR");
+            reset_outputs();
+            detail::fpu_multiply_accumulate_scalar(scalar, source, destination);
+            fpu_multiply_accumulate(dispatched, source, destination);
+            compare(scalar, dispatched, "FMAC");
+        }
+    }
+}
+
 int main() {
+    test_dispatched_vector_arithmetic();
     using namespace katana::runtime;
     test_precise_arithmetic();
 
@@ -731,7 +817,7 @@ int main() {
             simd_cpu.fr[8u + index] = scalar_cpu.fr[8u + index];
         }
         const auto before = simd_cpu.fr;
-        fpu_transform_vector(scalar_cpu, 8u);
+        detail::fpu_transform_vector_scalar(scalar_cpu, 8u);
         simd_available = try_fpu_transform_vector_simd(simd_cpu, 8u);
         if (!simd_available) {
             require(simd_cpu.fr == before,

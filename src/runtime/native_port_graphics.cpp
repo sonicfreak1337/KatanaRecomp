@@ -7687,8 +7687,14 @@ class NativePortGraphicsDevice::Impl final {
 
     void publish_consumer_state_mailbox(
         const NativePortGraphicsLayout& layout,
+        const NativePortLifecycleState lifecycle) noexcept {
+        publish_consumer_state_mailbox(layout, lifecycle, BackendError{});
+    }
+
+    void publish_consumer_state_mailbox(
+        const NativePortGraphicsLayout& layout,
         const NativePortLifecycleState lifecycle,
-        const BackendError error = {}) noexcept {
+        const BackendError error) noexcept {
         const auto revision = next_consumer_state_revision();
         lock_consumer_state_mailbox();
         consumer_state_mailbox_.layout = layout;

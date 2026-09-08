@@ -598,6 +598,62 @@ int main(const int argc, char** const argv) {
     katana::runtime::NativePortImmutableWriteGuard immutable_guard(
         immutable_ranges);
 
+    {
+        using namespace katana::runtime;
+        constexpr auto executable = native_port_immutable_range_mask(
+            NativePortImmutableRangeKind::Executable);
+        constexpr auto read_only = native_port_immutable_range_mask(
+            NativePortImmutableRangeKind::ReadOnlyImage);
+        const std::array cell_ranges{
+            NativePortImmutableRange{0x0C001000u, 0x100u, executable},
+            NativePortImmutableRange{0x0C001100u, 0x100u, read_only},
+            NativePortImmutableRange{0x0C001201u, 0x7Fu, executable},
+            NativePortImmutableRange{0x0C001280u, 0x80u, read_only}};
+        const auto observed_mask = [&](const std::uint32_t address,
+                                       const std::size_t size,
+                                       const bool changed) {
+            NativePortImmutableWriteGuard guard(cell_ranges);
+            guard.observe_write({address, size, CodeWriteSource::Cpu, changed});
+            return guard.first_write_kind_mask();
+        };
+        require(observed_mask(0x8C001020u, 4u, false) == 0u &&
+                    observed_mask(0xAC001020u, 4u, true) == executable &&
+                    observed_mask(0x8D001120u, 4u, false) == read_only &&
+                    observed_mask(0x0C0010FFu, 2u, true) ==
+                        (executable | read_only),
+                "Homogeneous guard cells lost exact kinds or alias/mirror semantics.");
+        require(observed_mask(0x8C001200u, 1u, true) == 0u &&
+                    observed_mask(0x8C001201u, 1u, true) == executable &&
+                    observed_mask(0x8C00127Fu, 2u, true) ==
+                        (executable | read_only) &&
+                    observed_mask(0x8C001280u, 1u, false) == read_only &&
+                    observed_mask(0x8C001300u, 1u, true) == 0u &&
+                    observed_mask(0x8CFFFFFFu, 2u, true) ==
+                        (executable | read_only),
+                "Mixed guard cells lost unaligned edges or backing discontinuities.");
+        NativePortImmutableWriteGuard changing_guard(cell_ranges);
+        changing_guard.reserve_additional_runtime_executable_ranges(1u);
+        const auto generation = changing_guard.generation();
+        require(!changing_guard.tracks_address(0x8C002000u, 4u),
+                "Guard test expected an initially free cell.");
+        changing_guard.add_runtime_executable_range(0x8C002000u, 0x100u);
+        require(changing_guard.generation() == generation &&
+                    changing_guard.tracks_address(0xAD002020u, 4u),
+                "Guard cell activation incorrectly depends on write generation.");
+        changing_guard.remove_runtime_executable_range_committed(
+            0x8C002000u, 0x100u);
+        require(changing_guard.generation() == generation &&
+                    !changing_guard.tracks_address(0x0C002020u, 4u),
+                "Guard cell retirement retained stale coverage without a write.");
+        // Rebuild merges adjacent ranges, conservatively OR-ing their kinds.
+        // A homogeneous cell must preserve that existing merged-range result.
+        changing_guard.observe_write(
+            {0x8C001020u, 4u, CodeWriteSource::Cpu, false});
+        require(changing_guard.first_write_kind_mask() ==
+                    (executable | read_only),
+                "Rebuilt homogeneous guard cells lost the merged range mask.");
+    }
+
     constexpr std::uint32_t guard_page_size = 4096u;
     const std::array page_index_ranges{
         katana::runtime::NativePortImmutableRange{

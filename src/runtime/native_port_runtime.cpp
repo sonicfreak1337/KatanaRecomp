@@ -14,7 +14,11 @@ namespace katana::runtime {
 
 namespace {
 
-inline constexpr std::size_t immutable_guard_page_size = 4096u;
+inline constexpr std::size_t immutable_guard_page_size = 256u;
+inline constexpr std::uint8_t immutable_guard_mixed_page = 0x80u;
+static_assert((immutable_guard_mixed_page &
+    (native_port_immutable_range_mask(NativePortImmutableRangeKind::Executable) |
+     native_port_immutable_range_mask(NativePortImmutableRangeKind::ReadOnlyImage))) == 0u);
 inline constexpr std::size_t immutable_guard_page_count =
     native_port_main_memory_backing_size / immutable_guard_page_size;
 static_assert(
@@ -72,7 +76,7 @@ NativePortImmutableWriteGuard::NativePortImmutableWriteGuard(
     try {
         range_page_kind_masks_.resize(immutable_guard_page_count);
     } catch (const std::bad_alloc&) {
-        // The page index is only a negative lookup accelerator. Allocation
+        // The page index is only an exact lookup accelerator. Allocation
         // failure deliberately retains the exact range-search baseline.
         range_page_kind_masks_.clear();
     }
@@ -245,8 +249,19 @@ void NativePortImmutableWriteGuard::rebuild_range_page_index() const noexcept {
         const auto last_page = static_cast<std::size_t>(
             (overlap_end - 1u - backing_begin) /
             immutable_guard_page_size);
-        for (auto page = first_page; page <= last_page; ++page)
-            range_page_kind_masks_[page] |= range.kind_mask;
+        for (auto page = first_page; page <= last_page; ++page) {
+            const auto page_begin =
+                backing_begin + page * immutable_guard_page_size;
+            const auto page_end = page_begin + immutable_guard_page_size;
+            auto& mask = range_page_kind_masks_[page];
+            // The constructor can retain adjacent, unmerged fixed ranges.
+            // Partial coverage (even if another range fills the remainder)
+            // must use the exact range search, never an OR-ed homogeneous mask.
+            if (mask != 0u || range_begin > page_begin || range_end < page_end)
+                mask = immutable_guard_mixed_page;
+            else
+                mask = range.kind_mask;
+        }
     }
 }
 
@@ -264,13 +279,14 @@ std::uint8_t NativePortImmutableWriteGuard::range_kind_mask(
         const auto page_offset =
             static_cast<std::size_t>(relative) &
             (immutable_guard_page_size - 1u);
-        // Every segment/backing-mirror boundary is page aligned. An access
-        // wholly inside this mapped RAM page is therefore contiguous without
-        // canonicalizing its last byte again. Crossing or occupied pages keep
-        // the full alias/range checks below.
-        if (size <= immutable_guard_page_size - page_offset &&
-            range_page_kind_masks_[relative / immutable_guard_page_size] == 0u)
-            return 0u;
+        // Every segment/backing-mirror boundary is cell aligned. An access
+        // wholly inside one homogeneous cell has this exact range mask.
+        // Mixed cells and crossings retain the full alias/range checks below.
+        if (size <= immutable_guard_page_size - page_offset) {
+            const auto mask =
+                range_page_kind_masks_[relative / immutable_guard_page_size];
+            if ((mask & immutable_guard_mixed_page) == 0u) return mask;
+        }
     }
     const auto access_end =
         static_cast<std::uint64_t>(physical) + size;
