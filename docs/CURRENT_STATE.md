@@ -1,6 +1,6 @@
 # Aktueller Projektstand
 
-Stand: 8. September 2026, Produktcheckpoint r318. Historische Runs und
+Stand: 8. September 2026, r322 gebaut; autonome Performancephase und Levelmatrix laufen. Historische Runs und
 Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
 Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
 
@@ -68,9 +68,86 @@ Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
   Fuenf-Minuten-Lauf endet ohne Crash; inklusive Abschlussarbeiten sind es
   308,5 Sekunden. Die gezielte Moviefortsetzung ist damit bestaetigt,
   nicht die gesamte Knuckles-Story.
+- r319/r320 erhalten alle 249 Loaded-AOT-Modulbindungen. r320 enthaelt
+  250.806 Primary- und 699.851 Loaded-Blockanfaenge: gegen r319 kommen 107
+  beziehungsweise 261 hinzu, ohne einen bisherigen Entry oder eine
+  Sourcebindung zu entfernen. Alle 99 privaten Primary-Candidates und
+  6.253 Loaded-Seedrecords sind im erzeugten Produkt vorhanden. Neue
+  Taskzustands-, Auxwork-, Timer- und Indexfamilien bleiben Candidates;
+  die quellseitige Inventur umfasst 250 Programmabbilder.
+- Der r320-Batch enthaelt Korrekturen fuer die gemeinsam ausgewerteten
+  r319-Nutzercrashes von Sonic, Tails, Knuckles, Amy und Gamma. Ein
+  zusaetzlicher Texturfix erkennt eine inzwischen fremd belegte, noch nicht
+  geladene SDK-Registryzeile als verdraengte alte Hostbindung; Freigabe und
+  Wiederladen ueberschreiben diese fremde Zeile nicht. Die betroffenen
+  Laufpfade sind noch nicht abgenommen. Auf aktuelle Nutzeranweisung wurde
+  r320 nur gebaut und nicht vom Agenten gestartet.
+- r321 ist als Performance-NativeBringup-Produkt gebaut. Alle 249 geladenen
+  Modulbindungen und alle bisherigen Primary-Dispatchentries bleiben erhalten.
+  Das Produkt enthaelt 250.862 Primary- und 699.948 Loaded-Blockanfaenge sowie
+  alle 6.256 geladenen Seedrecords. Die vier vorherigen fehlenden Crashentries
+  und Gammas direkter Primary-Helfer sind statisch vorhanden. Bei SBOARD wird
+  ein frueherer Innenroot in die vollstaendige Funktion aufgenommen; seine
+  Instruktion bleibt im AOT enthalten, die Epilogaufteilung wurde an den
+  Originalbytes geprueft. Das ist keine pauschale Laufabnahme.
+- r322 erhaelt alle 249 Loaded-AOT-Modulbindungen, jeden bisherigen Loaded-
+  Blockanfang samt Bytebereich und alle bisherigen Primary-Dispatchtuples.
+  Der Pack enthaelt 1.086 Partitionen, 18.965 Funktionen und 304.710 Bloecke;
+  die Dispatchtabelle waechst von 951.746 auf 953.473 Eintraege. Alle 106
+  privaten Primary-Candidates und die sourcegebundenen neuen Loaded-Roots
+  sind vorhanden. 71 Ownerwechsel liegen ausschliesslich in ADV00: Der
+  vollstaendige Callback 29EA nimmt den frueheren Innenroot und seine
+  gemeinsame Rueckkehrroutine auf. Alte Resume-PCs behalten ihren jeweiligen
+  Eintrittszustand; kein alter Block und keine Gastoperation entfallen.
 
 ## Offene Produktfragen
 
+- Der in r321 enthaltene r320-Nutzerbatch betrifft Gamma, den Sky-Chase-2-Boss, Tails,
+  Knuckles und Amy. Vier Faelle betreffen AOT-Entries; Amy endet im
+  Grafikadapter. Die Gamma-Ursache betrifft eine gemeinsame Primary-
+  Funktion mit vier belegten Aufrufern: Die strukturelle Erkennung hat einen
+  gueltigen Delayslot ausserhalb ihres 32-Instruktions-Prueffensters verworfen.
+  Der Sourcefix prueft diesen gegen die tatsaechliche Image-/Segmentgrenze;
+  alle bisherigen Opcode-, Owner- und Entrypruefungen bleiben erhalten.
+  Die neuen Entries und ihr direkter Helfer sind jetzt kompiliert; die
+  jeweilige Laufabnahme bleibt getrennt. Die sourcegebundenen
+  Sky-Chase-Child- und Hub-Zustandsfamilien wurden ueber 250 Images geprueft;
+  ihre vorhandenen Geschwister bleiben erhalten. Der vorher fehlende
+  SBOARD-Effektentry ist ebenfalls im Produkt enthalten.
+- Die SDK-Clippingsemantik erlaubt sechs Ausgabepunkte aus vier
+  Eingangspunkten. Der native Puffer fuer diesen Fall waechst von fuenf auf
+  sechs Punkte, mit zwoelf statt neun Listvertices. Reihenfolge und Winding
+  bleiben erhalten. Der konkrete Amy-Abbruchzweig ist in der alten Capsule
+  nicht belegt; neue Fehlertranskripte behalten Zweig, Counts, Flags und
+  Kameratiefen. Diese Aenderung ist in r321, der urspruengliche Amy-Abbruch
+  ist weiterhin nicht eindeutig diesem Zweig zugeordnet.
+- Der abgeschlossene r321-Nutzerbatch enthaelt Gamma, Sonic, einen Stop vor
+  Chaos 6, Tails, Knuckles und Amy. Die ersten vier Faelle betreffen weitere Funktionsentries:
+  zwei ADV03-Callbacks mit drei gemeinsamen Helfern, ein Primary-Finalizer,
+  beide fehlenden Arme einer Chaos-6-Childfamilie und der Folgecallback des
+  SBOARD-Effekts. Amy benoetigt einen echten kurzen Task-Finalizer in STG12.
+  Diese Familien sind in r322 exportiert. Bei Knuckles lag keine bewiesene
+  falsche Generation vor: Ein SDK-verwalteter TEXLIST-Traeger im Heap wurde
+  faelschlich wie Code innerhalb des Loaded-AOT-Images geprueft. Der Fix
+  trennt beide bereits gebundenen Traegerarten und behaelt RAM-, Owner-,
+  Referenzzaehler-, Epoch- und Ueberschreibpruefungen bei. Die jeweiligen
+  spaeten Nutzerpfade bleiben bis zum tatsaechlichen Erreichen offen.
+- Der globale Callbackscan klassifiziert alle 36 gefundenen fehlenden
+  Storekandidaten in 250 Images: 29 Stores gehoeren zu 22 Callbackfamilien,
+  sieben zu Daten. Einschliesslich belegter Folgecallbacks ergaenzt der
+  globale Vertrag sechs Primary- und 37 Loaded-Roots. Seine 100 bestehenden
+  Primary-Candidates bleiben erhalten; insgesamt sind es jetzt 106.
+  Nicht bewiesene dynamische Zielmengen bleiben fail-closed. Es gibt keine
+  automatische Proof-Promotion. Der Canonical-Coverage-Builder
+  revalidiert vorhandene Disassembly-Daten bei unveraenderter CLI und
+  unveraenderten Images. Der gemessene Erweiterungslauf dauert 7,6 Sekunden
+  und startet keinen neuen Analyzer- oder Compilerprozess.
+- Der Nutzer hat den Batch geschlossen und anschliessend autonome Builds,
+  FPS-Messungen und gesteuerte 60-Sekunden-Leveltests freigegeben. Die aktuelle
+  32er-Matrix verwendet r322, Profil 1, 144-Hz-Anforderung und isolierte Saves.
+  Danach werden nur betroffene Performance-/Regressionspfade wiederholt.
+  Ein spaeterer langsamer Abschnitt in Amys Hot Shelter ist durch den
+  anfangs stabilen Debugabschnitt nicht abgenommen.
 - Sky Chase, Chao Garden und weitere noch nicht erreichte Storyfortsetzungen
   sind nicht pauschal freigegeben. Ein neuer unbekannter Block endet weiterhin
   fail-closed; ein fehlender Crashrecord ist kein Beweis fuer Fehlerfreiheit.
@@ -84,10 +161,13 @@ Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
   fehlt. HUD und Fadenkreuz bleiben zur Diagnose offen; die begrenzte,
   standardmaessig ausgeschaltete Spritebeobachtung unterscheidet jetzt
   korrekt zwischen gebundenen und ungebundenen Texturen.
-- Untertitel und Rueckblicktexte bleiben zur Abnahme offen. Die neue,
-  standardmaessig ausgeschaltete Diagnose beobachtet Timer, Textqueue,
-  vollstaendige Pixelpuffer und bestehende native Texturansichten. Geaenderte
-  Textpixel bei wiederverwendeter Ansicht werden als Updatefrage untersucht.
+- Untertitel und Rueckblicktexte bleiben zur Nutzerabnahme offen. Die
+  Diagnose zeigt wechselnde Pixelpuffer bei wiederverwendeter nativer Ansicht
+  und wachsendem SDK-Referenzzaehler. r320 bindet die drei belegten dynamischen
+  Textfreigabe-Caller an die vorhandene kompilierte SDK-Freigabe. Erst nach
+  deren tatsaechlicher Registryfreigabe werden alte Hostansichten verworfen;
+  der Folgetext kann neu hochgeladen werden. Die Diagnose war kein visueller
+  Nachweis einer fortschreitenden Cutscene, und r320 hat noch keinen Laufpass.
 - Der gemeinsame Objektcluster ist in r316 durch den Nutzer bestaetigt;
   Menuegrafik und andere nicht erneut beurteilte Grafikpfade bleiben offen.
   Bestehende Shader-, Tiefen-,
@@ -115,9 +195,32 @@ Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
   und drei weitere C++-Dateien kompiliert. Der Hostbuild dauert 107,2 Sekunden.
   Der gemeinsame Dispatchheader bleibt unveraendert. Ein weiterer
   Bauzeitverlust ist konkret belegt: Elf neue Eintraege verschieben die
-  festen 8.192-Zeilen-Grenzen von 58 Dispatchdateien. Eine nach Adresse
-  stabile Aufteilung wird fuer den naechsten Batch vorbereitet; sie ist
-  noch nicht implementiert oder als Zeitgewinn gemessen.
+  festen 8.192-Zeilen-Grenzen von 58 Dispatchdateien. r319 implementiert eine
+  Aufteilung nach stabilen Adresspraefixen mit hoechstens 8.192 Eintraegen
+  pro Blatt; sein einmaliger Wechsel baut 188 Dispatchdateien. Der gesamte
+  r319-Wrapper dauert 644,2 Sekunden und verfehlt das Zehn-Minuten-Ziel.
+- Der erfolgreiche r320-Export dauert 513,7 Sekunden einschliesslich
+  Vorpruefung und Packaging; davon entfallen 457,1 Sekunden auf den CLI-Lauf
+  und 64,0 Sekunden auf den Hostbuild. Der Ninja-Plan umfasst neun
+  C++-Compiles: drei AOT-Einheiten, zwei Dispatch-Shards, einen Loaded-Shard
+  und drei weitere Dateien. 1.081 von 1.084 AOT-Einheiten kommen aus dem
+  Codegen-Cache. Dieser inkrementelle Lauf verwendet auch Artefakte eines
+  zuvor gestoppten Versuchs; dessen Zeit sowie gescheiterte Vorpruefungen
+  sind in den 513,7 Sekunden nicht enthalten. Das ist kein Kaltnachweis.
+- Der erfolgreiche r321-Wrapper dauert 613,5 Sekunden, davon 535,7 Sekunden
+  im CLI. Der Hostbuild umfasst 59,4 Sekunden; Kompilieren und Linken davon
+  56,7 Sekunden. Zehn von 1.084 AOT-Einheiten und insgesamt 21 C++-Dateien
+  werden kompiliert. Die fruehere fehlgeschlagene Vorpruefung und der
+  CLI-Neubau sind nicht enthalten. Der inkrementelle Export verfehlt das
+  Zehn-Minuten-Ziel; ein Kaltnachweis fehlt. Der groesste Zeitanteil bleibt
+  Analyse und Validierung. Kleine belegte Callbackfamilien sollen die
+  vorhandene CLI und bytegebundene Erkenntnisse weiterverwenden; allgemeine
+  Analyzeraenderungen werden nur gebuendelt mit ihrem realen Bedarf gebaut.
+- Acht unveraenderte alte Candidate-Familien mit 534 Roots haben jetzt
+  einen gebundenen Quellcheckpoint. Er bewahrt die Originalaudits und
+  verifiziert die lebenden Quellen, ohne geloeschte alte Portverzeichnisse
+  vorauszusetzen. Historische Missingness bleibt historisch; die aktuelle
+  CLI prueft ihre eigenen Image-, Source-, Block- und Ownerbindungen weiter.
 
 ## Entwicklungsablauf
 

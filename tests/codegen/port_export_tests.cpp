@@ -1744,20 +1744,20 @@ int run_test(const int argc, char* argv[]) {
                     .find("\"static_entries\":[2348875816,2348875828]") !=
                 std::string::npos &&
             explicit_static_dispatch_shards.find(
-                "entries.push_back({0x89000000u, "
-                "&fn_89000000_runtime_entry, false, false})") !=
+                "{0x89000000u, "
+                "&fn_89000000_runtime_entry, false, false},") !=
                 std::string::npos &&
             explicit_static_dispatch_shards.find(
-                "entries.push_back({0x8C010006u, "
-                "&fn_8C010000_runtime_entry, true, true})") !=
+                "{0x8C010006u, "
+                "&fn_8C010000_runtime_entry, true, true},") !=
                 std::string::npos,
         "Expliziter identity-bound StaticEntry wird nicht materialisiert "
         "oder Hook-/RuntimeImage- und statischer Chain-Root werden nicht "
         "getrennt klassifiziert.");
     require(
         explicit_static_dispatch_shards.find(
-            "entries.push_back({0x8C010000u, "
-            "&fn_8C010000_runtime_entry, false, true})") != std::string::npos &&
+            "{0x8C010000u, "
+            "&fn_8C010000_runtime_entry, false, true},") != std::string::npos &&
             explicit_static_sources.at("include/native-port-dispatch-internal.hpp")
                     .find("bool primary_static = false;") != std::string::npos &&
             explicit_static_sources.at("code/native-port-dispatch.cpp")
@@ -2313,7 +2313,7 @@ int run_test(const int argc, char* argv[]) {
         if (path.starts_with("code/unit-") && path.ends_with(".cpp"))
             latent_units += content;
     const auto& latent_dispatch_shard =
-        latent_generated.at("code/native-port-dispatch-shard-00000.cpp");
+        latent_generated.at("code/native-port-dispatch-shard-00001.cpp");
     const auto& latent_loaded_aot_shard =
         latent_generated.at("code/native-port-loaded-aot-shard-00000.cpp");
     const auto latent_metadata = latent_generated.at("metadata/port-project.json");
@@ -2425,11 +2425,11 @@ int run_test(const int argc, char* argv[]) {
                     latent_block_identity + "\"") !=
                     std::string::npos &&
                 latent_dispatch_shard.find(
-                    "entries.push_back({0x80000000u, "
-                    "&fn_80000000_runtime_entry, false, false})") !=
+                    "{0x80000000u, "
+                    "&fn_80000000_runtime_entry, false, false},") !=
                     std::string::npos &&
                 latent_dispatch_shard.find(
-                    "entries.push_back({0x88000000u") == std::string::npos &&
+                    "{0x88000000u, &fn_") == std::string::npos &&
                 occurrences(latent_loaded_aot_shard, latent_block_identity) == 4u,
             "Latentes natives Disc-AOT wurde nicht als ein Byte-Modul mit "
             "zwei exakten SourceBindings exportiert.");
@@ -3028,7 +3028,7 @@ int run_test(const int argc, char* argv[]) {
             coverage_dispatch_shards += content;
     require(
         coverage_dispatch_shards.find(
-            "entries.push_back({0x8C010010u, &fn_8C010010_runtime_entry,") !=
+            "{0x8C010010u, &fn_8C010010_runtime_entry,") !=
             std::string::npos &&
             coverage_dispatch.find(
                 "{{0x8C010010u, 0x0C010010u}") != std::string::npos,
@@ -3036,8 +3036,8 @@ int run_test(const int argc, char* argv[]) {
         "Runtime-Entry und statischen Dispatcher-Eintrag.");
     require(
         coverage_dispatch_shards.find(
-            "entries.push_back({0x8C010000u, "
-            "&fn_8C010000_runtime_entry, false, true})") != std::string::npos &&
+            "{0x8C010000u, "
+            "&fn_8C010000_runtime_entry, false, true},") != std::string::npos &&
             coverage_dispatch.find("entry->primary_static == primary_static;") !=
                 std::string::npos &&
             coverage_dispatch.find(
@@ -3050,7 +3050,7 @@ int run_test(const int argc, char* argv[]) {
                 "if (!active_loaded_aot_binder->bind_entry(address))") !=
                 std::string::npos &&
             coverage_dispatch_shards.find(
-                "entries.push_back({0x80000008u") == std::string::npos,
+                "{0x80000008u, &fn_") == std::string::npos,
         "Primary MayContinueOriginal-FunctionEntry verlor seinen Originalpfad "
         "oder Loaded-AOT-/Replacement-Interior-Gates wurden aufgeweicht.");
     const auto coverage_metadata =
@@ -3066,14 +3066,14 @@ int run_test(const int argc, char* argv[]) {
     const bool block_only_entry_was_published = std::ranges::any_of(
         coverage_generated, [](const auto& generated_file) {
             return generated_file.second.find(
-                       "entries.push_back({0x8C100008u") !=
+                       "{0x8C100008u, &fn_") !=
                    std::string::npos;
         });
     const bool resident_block_only_entry_uses_exact_owner =
         std::ranges::any_of(
             coverage_generated, [](const auto& generated_file) {
                 return generated_file.second.find(
-                           "entries.push_back({0x8C010004u, "
+                           "{0x8C010004u, "
                            "&fn_8C010000_runtime_entry") !=
                        std::string::npos;
             });
@@ -3111,8 +3111,8 @@ int run_test(const int argc, char* argv[]) {
         "emittierten primaeren Static-AOT-Block und Mid-Block-Resume-Entry.");
     require(
         coverage_dispatch_shards.find(
-            "entries.push_back({0x8C010008u, "
-            "&fn_8C010000_runtime_entry, false, true})") != std::string::npos &&
+            "{0x8C010008u, "
+            "&fn_8C010000_runtime_entry, false, true},") != std::string::npos &&
             coverage_dispatch.find(" entry_status=") != std::string::npos &&
             coverage_dispatch.find(" dispatch_source=0x") != std::string::npos &&
             coverage_dispatch.find(" expected_owner=0x") != std::string::npos &&

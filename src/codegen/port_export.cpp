@@ -2,6 +2,7 @@
 
 #include "structured_control_flow_progress.hpp"
 #include "native_aot_resume.hpp"
+#include "native_dispatch_shards.hpp"
 
 #include "../analysis/guarded_native_entry_shape.hpp"
 #include "../analysis/returned_receiver_diagnostic.hpp"
@@ -19075,12 +19076,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                << std::setfill('0') << address;
         return output.str();
     };
-    // The table is declarative and each entry is tiny.  Larger shards keep
-    // full-game native ports from paying hundreds of compiler invocations
-    // without increasing the optimizer's heavy AOT-function workload.
-    constexpr std::size_t blocks_per_shard = 8192u;
-    const auto shard_count =
-        (blocks.size() - 1u) / blocks_per_shard + 1u;
+    const auto dispatch_shards = detail::native_dispatch_shards(blocks);
+    const auto shard_count = dispatch_shards.size();
     // Loaded-AOT block identities used to live in native-port-dispatch.cpp.
     // A full-disc product can carry hundreds of thousands of those tiny
     // declarative rows, turning otherwise modest runtime glue into one giant,
@@ -19156,7 +19153,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                 "Nativer Produktdispatch-Index ist zu gross.");
         dispatch_index_capacity *= 2u;
     }
-    const auto shard_suffix = [](const std::size_t index) {
+    const auto shard_suffix = [](const std::uint64_t index) {
         std::ostringstream output;
         output << std::setw(5) << std::setfill('0') << index;
         return output.str();
@@ -19209,9 +19206,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     result.push_back(
         {"include/native-port-dispatch-internal.hpp", header.str()});
 
-    for (std::size_t shard = 0u; shard < shard_count; ++shard) {
-        const auto begin = shard * blocks_per_shard;
-        const auto end = std::min(begin + blocks_per_shard, blocks.size());
+    for (const auto& shard : dispatch_shards) {
+        const auto begin = shard.begin;
+        const auto end = shard.end;
         std::vector<std::uint32_t> owners;
         owners.reserve(end - begin);
         for (auto index = begin; index < end; ++index)
@@ -19220,7 +19217,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
         std::ostringstream shard_output;
         shard_output
-            << "#include \"../include/native-port-dispatch-internal.hpp\"\n\n"
+            << "#include \"../include/native-port-dispatch-internal.hpp\"\n"
+               "#include <array>\n\n"
             << "namespace " << entry_namespace << " {\n";
         for (const auto owner : owners)
             shard_output
@@ -19229,10 +19227,12 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                    "katana::runtime::BlockExecutionContext&);\n";
         shard_output << "namespace runtime_dispatch_detail {\n"
                      << "void append_native_dispatch_shard_"
-                     << shard_suffix(shard)
-                     << "(std::vector<NativePortDispatchEntry>& entries) {\n";
+                     << shard_suffix(shard.id)
+                     << "(std::vector<NativePortDispatchEntry>& entries) {\n"
+                     << "    static constexpr std::array<NativePortDispatchEntry, "
+                     << end - begin << "u> rows{{\n";
         for (auto index = begin; index < end; ++index)
-            shard_output << "    entries.push_back({0x"
+            shard_output << "        {0x"
                          << symbol(blocks[index].address) << "u, &fn_"
                          << symbol(blocks[index].owner)
                          << "_runtime_entry, "
@@ -19247,12 +19247,14 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                                          *blocks[index].block)
                                  ? "true"
                                  : "false")
-                         << "});\n";
-        shard_output << "}\n} // namespace runtime_dispatch_detail\n"
+                         << "},\n";
+        shard_output << "    }};\n"
+                        "    entries.insert(entries.end(), rows.begin(), rows.end());\n"
+                        "}\n} // namespace runtime_dispatch_detail\n"
                      << "} // namespace " << entry_namespace << "\n";
         result.push_back(
             {std::filesystem::path("code") /
-                 ("native-port-dispatch-shard-" + shard_suffix(shard) +
+                 ("native-port-dispatch-shard-" + shard_suffix(shard.id) +
                   ".cpp"),
              shard_output.str()});
     }
@@ -19671,9 +19673,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     // Only the aggregator calls these functions. Keep their count-dependent
     // declarations out of the shared header so adding one shard does not
     // invalidate every unchanged dispatch, loaded-AOT and runtime-image unit.
-    for (std::size_t shard = 0u; shard < shard_count; ++shard)
+    for (const auto& shard : dispatch_shards)
         output << "void append_native_dispatch_shard_"
-               << shard_suffix(shard)
+               << shard_suffix(shard.id)
                << "(std::vector<NativePortDispatchEntry>& entries);\n";
     for (std::size_t shard = 0u;
          shard < loaded_aot_shards.size(); ++shard)
@@ -19848,9 +19850,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        std::vector<NativePortDispatchEntry> result;\n"
               "        result.reserve("
            << blocks.size() << "u);\n";
-    for (std::size_t shard = 0u; shard < shard_count; ++shard)
+    for (const auto& shard : dispatch_shards)
         output << "        append_native_dispatch_shard_"
-               << shard_suffix(shard) << "(result);\n";
+               << shard_suffix(shard.id) << "(result);\n";
     output << "        // Export shards preserve the already address-sorted block table.\n"
               "        // Validate that contract in linear time instead of sorting it again.\n"
               "        if (result.size() != "
@@ -25290,11 +25292,12 @@ std::vector<std::uint32_t> latent_aot_external_primary_entries(
             const auto primary_remaining =
                 *primary_image_end - static_cast<std::uint64_t>(address);
             const auto segment_remaining = segment->bytes.size() - *offset;
-            const auto available_instructions = std::min<std::size_t>(
-                maximum_entry_scan_instructions,
+            const auto source_instructions =
                 static_cast<std::size_t>(std::min<std::uint64_t>(
                     primary_remaining, segment_remaining)) /
-                    sizeof(std::uint16_t));
+                sizeof(std::uint16_t);
+            const auto available_instructions = std::min<std::size_t>(
+                maximum_entry_scan_instructions, source_instructions);
             for (std::size_t index = 0u;
                  index < available_instructions; ++index) {
                 const auto byte = *offset + index * sizeof(std::uint16_t);
@@ -25308,7 +25311,10 @@ std::vector<std::uint32_t> latent_aot_external_primary_entries(
                 if (!decoded.is_known()) return false;
                 if (!decoded.changes_control_flow()) continue;
                 if (!decoded.has_delay_slot) return true;
-                if (index + 1u >= available_instructions) return false;
+                // A transfer at the end of the bounded prefix still owns
+                // its physical delay instruction. Validate that word against
+                // the exact source extent, not the prefix inspection budget.
+                if (index + 1u >= source_instructions) return false;
                 const auto delay_byte =
                     *offset + (index + 1u) * sizeof(std::uint16_t);
                 const auto delay_opcode = static_cast<std::uint16_t>(

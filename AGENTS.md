@@ -5,6 +5,24 @@ Phase und jeden Teilbereich dieses Repositories. Sie sind keine Empfehlung.
 Widersprechende aeltere Prozessbeschreibungen in Roadmap-, Task-, Status-,
 Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
+## Aktuelle Nutzeranordnung zum Sonic-Export (8. September 2026)
+
+- Der r321-Crashbatch ist vom Nutzer geschlossen und zum Export freigegeben.
+  Anschliessend sind autonome Performancebuilds und eigene Leveltests fuer
+  die angeordnete Optimierungsphase freigegeben: einmalige Levelmatrix mit
+  Steuerung und hoechstens 60 Sekunden Gameplay je Stage, danach gezielte
+  Wiederholungen der betroffenen Pfade. Ziel ist CPU-Leistungspuffer fuer
+  stabile originale 30-Hz-Simulation bei 144-Hz-Praesentation. Der spaetere
+  langsame Abschnitt in Amys Hot Shelter bleibt ohne passende Messung offen.
+  Test-Saves bleiben isoliert; waehrend FPS-Messungen laeuft kein Build.
+- Waehrend der Nutzer einen Crashbatch sammelt, startet ein Sonic-Produktexport
+  erst, wenn der Nutzer ausdruecklich zum Export auffordert.
+- Weitere Crashmeldungen und die bisherige Autonomiefreigabe sind kein
+  Exportsignal. Ein gestoppter Export wird nicht automatisch fortgesetzt.
+- Ursachenanalyse, Familienpruefung und Sourcefixes werden im offenen Batch
+  weiter gesammelt. Diese aktuelle Anordnung hat Vorrang vor den folgenden
+  aelteren Regeln zum automatischen Export eines fertigen Batches.
+
 ## Verbindliche Entwicklungsloops und Evidence-Klassen
 
 Die vollstaendige Definition steht in
