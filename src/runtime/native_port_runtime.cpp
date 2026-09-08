@@ -22,7 +22,7 @@ static_assert(
 
 [[nodiscard]] std::uint32_t native_port_backing_address(
     const std::uint32_t address) noexcept {
-    const auto physical = canonical_physical_address(address);
+    const auto physical = canonical_physical_address_inline(address);
     if (physical < native_port_main_memory_physical_base ||
         physical >= native_port_main_memory_physical_base +
                         native_port_main_memory_physical_span)
@@ -258,6 +258,20 @@ std::uint8_t NativePortImmutableWriteGuard::range_kind_mask(
     if (size > std::numeric_limits<std::uint32_t>::max())
         return all_kind_mask_;
     const auto physical = native_port_backing_address(address);
+    const auto relative = physical - native_port_main_memory_physical_base;
+    if (range_page_kind_masks_.size() == immutable_guard_page_count &&
+        relative < native_port_main_memory_backing_size) {
+        const auto page_offset =
+            static_cast<std::size_t>(relative) &
+            (immutable_guard_page_size - 1u);
+        // Every segment/backing-mirror boundary is page aligned. An access
+        // wholly inside this mapped RAM page is therefore contiguous without
+        // canonicalizing its last byte again. Crossing or occupied pages keep
+        // the full alias/range checks below.
+        if (size <= immutable_guard_page_size - page_offset &&
+            range_page_kind_masks_[relative / immutable_guard_page_size] == 0u)
+            return 0u;
+    }
     const auto access_end =
         static_cast<std::uint64_t>(physical) + size;
     if (access_end >
@@ -273,18 +287,6 @@ std::uint8_t NativePortImmutableWriteGuard::range_kind_mask(
         // represented by one canonical interval. It must never become a
         // proof of non-aliasing for the static product.
         return all_kind_mask_;
-    const auto relative = physical - native_port_main_memory_physical_base;
-    if (range_page_kind_masks_.size() == immutable_guard_page_count &&
-        relative < native_port_main_memory_backing_size) {
-        const auto page_offset =
-            static_cast<std::size_t>(relative) &
-            (immutable_guard_page_size - 1u);
-        if (size <= immutable_guard_page_size - page_offset &&
-            range_page_kind_masks_[
-                static_cast<std::size_t>(relative) /
-                immutable_guard_page_size] == 0u)
-            return 0u;
-    }
     const auto found = std::lower_bound(
         ranges_.begin(), ranges_.end(), physical,
         [](const NativePortImmutableRange& range,

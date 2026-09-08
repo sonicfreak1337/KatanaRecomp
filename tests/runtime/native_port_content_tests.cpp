@@ -640,6 +640,20 @@ int main(const int argc, char** const argv) {
         "Negativer Page-Reject verlor Seitenrand, Alias, belegte Seite "
         "oder Baseline ausserhalb des Main-RAM-Backings.");
 
+    // Sonic's AOT stores overwhelmingly hit empty RAM pages. The early
+    // rejection must remain exact for every direct segment and RAM mirror,
+    // including the last byte before a backing discontinuity.
+    for (const auto segment : {0x00000000u, 0x80000000u, 0xA0000000u}) {
+        for (const auto mirror : {0x0C000000u, 0x0D000000u, 0x0E000000u, 0x0F000000u}) {
+            const auto base = segment | mirror;
+            require(!page_index_guard.tracks_address(base + 0x2FFCu, 4u) &&
+                        page_index_guard.tracks_address(base + 0x2FFCu, 24u) &&
+                        !page_index_guard.tracks_address(base + 0xFFFFFCu, 4u) &&
+                        page_index_guard.tracks_address(base + 0xFFFFFCu, 8u),
+                    "Empty-page early rejection crossed an occupied page or RAM mirror.");
+        }
+    }
+
     {
         katana::runtime::CpuState chain_cpu;
         ChainGuardHost chain_host;
