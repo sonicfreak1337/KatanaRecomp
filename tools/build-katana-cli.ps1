@@ -184,6 +184,33 @@ finally {
     Pop-Location
 }
 
+# Bind the diagnostic component material to the CLI built in this invocation.
+# Component-only targets must not attach fresh material to an older executable.
+if ('katana-recomp' -in $targetList) {
+    $componentMaterialPath = Join-Path $buildRoot `
+        'generated/include/katana/component_identity.hpp.materials.json'
+    $builtCliPath = Join-Path $buildRoot 'katana-recomp.exe'
+    $componentMaterial = Get-Content -LiteralPath $componentMaterialPath -Raw |
+        ConvertFrom-Json
+    $componentEvidence = [ordered]@{
+        contract = 1
+        observational_only = $true
+        cli_sha256 = (Get-FileHash -LiteralPath $builtCliPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        material_file_sha256 = (Get-FileHash -LiteralPath $componentMaterialPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        components = $componentMaterial.components
+    }
+    $componentEvidencePath = Join-Path $buildRoot 'katana-recomp.components.json'
+    $componentEvidenceCandidate = "$componentEvidencePath.candidate-$PID"
+    try {
+        [IO.File]::WriteAllText($componentEvidenceCandidate,
+            ($componentEvidence | ConvertTo-Json -Depth 8),
+            [Text.UTF8Encoding]::new($false))
+        [IO.File]::Move($componentEvidenceCandidate, $componentEvidencePath, $true)
+    } finally {
+        Remove-Item -LiteralPath $componentEvidenceCandidate -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Output (
     "KATANA_BUILD_SUCCESS jobs=$Jobs targets=" +
     $Targets + " build=$buildRoot")

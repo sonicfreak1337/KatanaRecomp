@@ -364,6 +364,8 @@ list(
     "src/analysis/hardware_audit.cpp"
     "src/analysis/return_object_callback_inventory.cpp"
     "src/analysis/return_object_callback_inventory.hpp"
+    "src/analysis/returned_receiver_diagnostic.cpp"
+    "src/analysis/returned_receiver_diagnostic.hpp"
     "src/decoder/isa_coverage.cpp"
 )
 list(
@@ -441,6 +443,7 @@ file(
 )
 set(
     KATANA_PARTITION_CODEGEN_IDENTITY_INPUTS
+    "include/katana/runtime/code_address_inline.hpp"
     "include/katana/codegen/backend.hpp"
     "include/katana/codegen/cpp_emitter.hpp"
     "include/katana/codegen/native_aot_profile.hpp"
@@ -474,6 +477,7 @@ list(
     "include/katana/build_contract.hpp.in"
     "include/katana/runtime/aot_runtime_abi.hpp"
     "include/katana/runtime/block_abi.hpp"
+    "include/katana/runtime/code_address_inline.hpp"
     "include/katana/runtime/disc_install.hpp"
     "include/katana/runtime/dreamcast_boot.hpp"
     "include/katana/runtime/executable_modules.hpp"
@@ -592,7 +596,9 @@ list(
 )
 add_custom_command(
     OUTPUT "${KATANA_COMPONENT_IDENTITY_STAMP}"
-    BYPRODUCTS "${KATANA_COMPONENT_IDENTITY_HEADER}"
+    BYPRODUCTS
+        "${KATANA_COMPONENT_IDENTITY_HEADER}"
+        "${KATANA_COMPONENT_IDENTITY_HEADER}.materials.json"
     COMMAND
         "${CMAKE_COMMAND}"
         "-DKATANA_COMPONENT_IDENTITY_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
@@ -866,6 +872,7 @@ set(KATANA_PRODUCT_RUNTIME_HEADERS
     include/katana/runtime/block_table.hpp
     include/katana/runtime/cache_control.hpp
     include/katana/runtime/code_invalidation.hpp
+    include/katana/runtime/code_address_inline.hpp
     include/katana/runtime/closure_witness.hpp
     include/katana/runtime/crash_capsule.hpp
     include/katana/runtime/crash_report.hpp
@@ -1237,6 +1244,7 @@ add_library(katana_core_objects OBJECT
     src/analysis/function_value_analysis.cpp
     src/analysis/hardware_audit.cpp
     src/analysis/return_object_callback_inventory.cpp
+    src/analysis/returned_receiver_diagnostic.cpp
     src/analysis/owner_semantic_summary.cpp
     src/analysis/native_provider_equivalence.cpp
     src/analysis/executable_inventory.cpp

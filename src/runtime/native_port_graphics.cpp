@@ -82,6 +82,12 @@ struct NativePortRuntimeOptionsBridge final {
         state_request_path{};
 };
 
+enum class NativePortBackendPresentOutcome : std::uint8_t {
+    Presented,
+    Occluded,
+    Deferred,
+};
+
 constexpr std::array<std::uint32_t, 4u>
     runtime_presentation_rate_choices{60u, 90u, 120u, 144u};
 
@@ -219,6 +225,13 @@ void saturating_atomic_increment(
 [[nodiscard]] bool present_failure_test_requested() noexcept {
     const auto* const value =
         std::getenv("KATANA_PORT_TEST_PRESENT_FAILURE");
+    return background_test_mode_requested() && value != nullptr &&
+           std::string_view(value) == "1";
+}
+
+[[nodiscard]] bool present_busy_test_requested() noexcept {
+    const auto* const value =
+        std::getenv("KATANA_PORT_TEST_PRESENT_BUSY");
     return background_test_mode_requested() && value != nullptr &&
            std::string_view(value) == "1";
 }
@@ -1418,7 +1431,9 @@ class NativePortGraphicsBackend final {
         config_.development_state_directory =
             development_state_directory_storage_;
         inject_present_failure_once_ = present_failure_test_requested();
+        inject_present_busy_once_ = present_busy_test_requested();
         validate_graphics_config(config_);
+        initialize_present_policy();
         initialize_frame_capture();
         initialize_graphics_diagnostics();
         create_window();
@@ -2393,7 +2408,7 @@ class NativePortGraphicsBackend final {
     void present() {
         complete_frame();
         try {
-            repeat_present("present");
+            static_cast<void>(repeat_present("present"));
         } catch (...) {
             completed_frame_available_ = false;
             abort_frame_after_command_failure();
@@ -2439,7 +2454,8 @@ class NativePortGraphicsBackend final {
         invalidate_draw_state_shadow();
     }
 
-    void repeat_present(const char* const operation = "repeat-present") {
+    NativePortBackendPresentOutcome repeat_present(
+        const char* const operation = "repeat-present") {
         require_owner_thread();
         if (frame_open_ || !completed_frame_available_)
             fail(NativePortGraphicsFailure::InvalidFrame,
@@ -2447,7 +2463,7 @@ class NativePortGraphicsBackend final {
                  "repeat-without-completed-frame");
         start_render_submit_telemetry();
         begin_gpu_timing_frame();
-        present_completed_frame(operation);
+        return present_completed_frame(operation);
     }
 
   private:
@@ -3083,7 +3099,8 @@ class NativePortGraphicsBackend final {
         invalidate_draw_state_shadow();
     }
 
-    void present_completed_frame(const char* const operation) {
+    NativePortBackendPresentOutcome present_completed_frame(
+        const char* const operation) {
         poll_events();
         update_runtime_options_menu();
         if (minimized_) {
@@ -3091,7 +3108,7 @@ class NativePortGraphicsBackend final {
             stop_render_submit_telemetry();
             flush_render_telemetry();
             snapshot_.occluded = true;
-            return;
+            return NativePortBackendPresentOutcome::Occluded;
         }
         context_->OMSetRenderTargets(
             1u, swap_chain_target_.GetAddressOf(), nullptr);
@@ -3137,10 +3154,43 @@ class NativePortGraphicsBackend final {
                  static_cast<std::uint32_t>(E_FAIL),
                  operation);
         }
-        const auto result = swap_chain_->Present(
-            config_.synchronize_present ? 1u : 0u, 0u);
+        // DXGI's DO_NOT_WAIT result is an output-deadline miss, not device
+        // loss. Keep this to the software-paced flip model path; direct and
+        // SerialReference presentation retain their established contract.
+        // Flycast's D3D11 presenter uses the same flag/result pair in
+        // core/rend/dx11/dx11context.cpp.
+        const bool nonblocking =
+            allow_nonblocking_present_ && flip_swap_chain_ &&
+            runtime_options_ != nullptr &&
+            runtime_options_->independent_presentation_enabled.load(
+                std::memory_order_acquire);
+        // A single queued frame causes DO_NOT_WAIT to reject otherwise
+        // useful output deadlines while DWM still owns the preceding image.
+        // Bound independent output to two frames; the serial path keeps one.
+        // Change this only on a policy transition, never query COM per frame.
+        const auto maximum_latency = nonblocking ? present_queue_limit_ : 1u;
+        if (dxgi_device_ && applied_present_queue_limit_ != maximum_latency) {
+            const auto latency_result =
+                dxgi_device_->SetMaximumFrameLatency(maximum_latency);
+            if (FAILED(latency_result))
+                fail(NativePortGraphicsFailure::DeviceLost,
+                     static_cast<std::uint32_t>(latency_result),
+                     "present-queue-limit");
+            applied_present_queue_limit_ = maximum_latency;
+        }
+        HRESULT result = S_OK;
+        if (nonblocking && inject_present_busy_once_) {
+            inject_present_busy_once_ = false;
+            result = DXGI_ERROR_WAS_STILL_DRAWING;
+        } else {
+            result = swap_chain_->Present(
+                nonblocking ? 0u : (config_.synchronize_present ? 1u : 0u),
+                nonblocking ? DXGI_PRESENT_DO_NOT_WAIT : 0u);
+        }
         if (present_wait_timer.has_value()) present_wait_timer->stop();
         flush_render_telemetry();
+        if (nonblocking && result == DXGI_ERROR_WAS_STILL_DRAWING)
+            return NativePortBackendPresentOutcome::Deferred;
         if (result == DXGI_STATUS_OCCLUDED) {
             snapshot_.occluded = true;
             // Explicit diagnostics must remain useful for bounded background
@@ -3148,7 +3198,7 @@ class NativePortGraphicsBackend final {
             // render target is complete here; begun_frames is the logical
             // native frame identity and does not advance on repeat_present.
             capture_completed_frame(snapshot_.begun_frames);
-            return;
+            return NativePortBackendPresentOutcome::Occluded;
         }
         if (FAILED(result)) {
             const auto removed = device_->GetDeviceRemovedReason();
@@ -3160,6 +3210,7 @@ class NativePortGraphicsBackend final {
         capture_completed_frame(snapshot_.presented_frames + 1u);
         saturating_increment(snapshot_.presented_frames);
         maybe_checkpoint_graphics_breadcrumbs();
+        return NativePortBackendPresentOutcome::Presented;
     }
 
   public:
@@ -3966,6 +4017,7 @@ class NativePortGraphicsBackend final {
         auto result = attempt(DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, 2u, true);
         if (result == E_INVALIDARG)
             result = attempt(DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, 2u, false);
+        flip_swap_chain_ = SUCCEEDED(result);
         if (FAILED(result)) {
             swap_chain_.Reset();
             device_.Reset();
@@ -3979,9 +4031,10 @@ class NativePortGraphicsBackend final {
                  static_cast<std::uint32_t>(result),
                  "d3d11-device");
         feature_level_ = selected;
-        ComPtr<IDXGIDevice1> dxgi_device;
-        if (SUCCEEDED(device_.As(&dxgi_device)))
-            static_cast<void>(dxgi_device->SetMaximumFrameLatency(1u));
+        if (SUCCEEDED(device_.As(&dxgi_device_))) {
+            if (SUCCEEDED(dxgi_device_->SetMaximumFrameLatency(1u)))
+                applied_present_queue_limit_ = 1u;
+        }
         create_swap_chain_target();
     }
 
@@ -5193,6 +5246,20 @@ class NativePortGraphicsBackend final {
             result = result * 10u + digit;
         }
         return result;
+    }
+
+    void initialize_present_policy() {
+        // Cold diagnostic controls let the same identity-bound binary compare
+        // queue policies without another AOT export. Invalid values fail closed.
+        const auto nonblocking = environment_unsigned(
+            L"KATANA_PORT_NONBLOCKING_PRESENT", 1u, "present-policy");
+        const auto queue_limit = environment_unsigned(
+            L"KATANA_PORT_PRESENT_QUEUE_LIMIT", 2u, "present-queue-limit");
+        if (nonblocking > 1u || queue_limit < 1u || queue_limit > 3u)
+            fail(NativePortGraphicsFailure::InvalidConfig, 1u,
+                 "present-policy");
+        allow_nonblocking_present_ = nonblocking != 0u;
+        present_queue_limit_ = static_cast<UINT>(queue_limit);
     }
 
     void initialize_frame_capture() {
@@ -6631,10 +6698,16 @@ class NativePortGraphicsBackend final {
     bool frame_open_ = false;
     bool completed_frame_available_ = false;
     bool inject_present_failure_once_ = false;
+    bool inject_present_busy_once_ = false;
+    bool flip_swap_chain_ = false;
+    bool allow_nonblocking_present_ = true;
+    UINT present_queue_limit_ = 2u;
+    UINT applied_present_queue_limit_ = 0u;
     NativePortDepthBufferConvention frame_depth_buffer_ =
         NativePortDepthBufferConvention::Forward;
 
     ComPtr<ID3D11Device> device_;
+    ComPtr<IDXGIDevice1> dxgi_device_;
     ComPtr<ID3D11DeviceContext> context_;
     D3D_FEATURE_LEVEL feature_level_ = D3D_FEATURE_LEVEL_10_0;
     ComPtr<IDXGISwapChain> swap_chain_;
@@ -6838,7 +6911,10 @@ class NativePortGraphicsBackend final {
     [[nodiscard]] bool completed_frame_ready() const noexcept { return false; }
     void abort_frame_after_command_failure() noexcept {}
     void publish_telemetry() noexcept {}
-    void repeat_present(const char* = "repeat-present") {}
+    NativePortBackendPresentOutcome repeat_present(
+        const char* = "repeat-present") {
+        return NativePortBackendPresentOutcome::Presented;
+    }
     void present_image(const NativePortImageView&,
                        NativePortViewportTarget,
                        NativePortImageFit, bool = false) {}
@@ -7859,9 +7935,13 @@ class NativePortGraphicsDevice::Impl final {
             return;
         }
         const auto before = backend.snapshot().presented_frames;
-        backend.repeat_present(operation);
+        const auto outcome = backend.repeat_present(operation);
         const auto after = backend.snapshot().presented_frames;
-        if (after > before) {
+        if (outcome == NativePortBackendPresentOutcome::Deferred) {
+            // The completed image remains authoritative and will be retried
+            // only when the next software deadline is reached.
+            saturating_atomic_add(published_missed_presentations_);
+        } else if (after > before) {
             if (consumer_completed_image_presented_)
                 saturating_add_value(consumer_repeated_presentations_, after - before);
             consumer_completed_image_presented_ = true;

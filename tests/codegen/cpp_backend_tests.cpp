@@ -227,16 +227,16 @@ int main() {
             "Konformitaetsprofil behaelt den Produktvertrag nicht mit externem Beobachter bei.");
 
     const auto normal_hook = conformance_emission.functions.find(
-        "note_instruction_entry(katana::runtime::relocate_code_address(0x8C010000u), false);");
+        "note_instruction_entry(katana::runtime::relocate_code_address_inline(0x8C010000u), false);");
     const auto normal_attempt = conformance_emission.functions.find(
         "ExplicitGuestInstructionAttempt guest_instruction_attempt", normal_hook);
     const auto owner_hook = conformance_emission.functions.find(
-        "note_instruction_entry(katana::runtime::relocate_code_address(0x8C010002u), false);");
+        "note_instruction_entry(katana::runtime::relocate_code_address_inline(0x8C010002u), false);");
     const auto terminal_attempt =
         conformance_emission.functions.find(
             "ExplicitGuestInstructionAttempt terminal_instruction_attempt");
     const auto slot_hook = conformance_emission.functions.find(
-        "note_instruction_entry(katana::runtime::relocate_code_address(0x8C010004u), true);");
+        "note_instruction_entry(katana::runtime::relocate_code_address_inline(0x8C010004u), true);");
     const auto slot_attempt = conformance_emission.functions.find(
         "ExplicitGuestInstructionAttempt guest_instruction_attempt", slot_hook);
     require(normal_hook != std::string::npos && normal_attempt != std::string::npos &&

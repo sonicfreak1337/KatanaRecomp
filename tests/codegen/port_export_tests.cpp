@@ -1895,7 +1895,7 @@ int run_test(const int argc, char* argv[]) {
             "Synthetische GDI durchlaeuft den Portexport nicht vollstaendig.");
     require(
         generated_units.find(
-            "switch (katana::runtime::unrelocate_code_address(call_target))") !=
+            "switch (katana::runtime::unrelocate_code_address_inline(call_target))") !=
                 std::string::npos &&
             generated_units.find("case 0x8C010012u:") != std::string::npos &&
             generated_units.find(
@@ -7746,7 +7746,7 @@ int run_test(const int argc, char* argv[]) {
         runtime_only_text.find("katana_block_" + block_symbol + ":", local_chain);
     const auto runtime_only_source =
         runtime_only_text.find(
-            "katana::runtime::relocate_code_address(0x" + site_symbol + "u)",
+            "katana::runtime::relocate_code_address_inline(0x" + site_symbol + "u)",
             runtime_only_label);
     const auto runtime_only_class = runtime_only_text.find(
         "DynamicDispatchSiteClass::RuntimeOnly", runtime_only_source);

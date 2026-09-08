@@ -220,6 +220,81 @@ struct PortExportOptions {
     std::string native_bringup_artifact_identity;
 };
 
+// A bounded, source-/analysis-bound view of the returned-receiver diagnostic.
+// These records are intentionally separate from the executable analysis
+// artifact: they are candidate inventory only and never affect roots,
+// closure, Strict admission or runtime dispatch.
+struct NativeDiscReturnedReceiverSummary final {
+    std::uint32_t function_address = 0u;
+    std::uint32_t call_instruction_address = 0u;
+    std::uint32_t callee_address = 0u;
+    bool optional_null = false;
+    bool complete = false;
+    bool candidate_only = true;
+    bool strict_eligible = false;
+    bool execution_eligible = false;
+
+    [[nodiscard]] bool operator==(
+        const NativeDiscReturnedReceiverSummary&) const = default;
+};
+
+struct NativeDiscReturnedReceiverFieldCandidate final {
+    std::uint32_t function_address = 0u;
+    std::uint32_t field_call_instruction_address = 0u;
+    std::uint32_t field_load_instruction_address = 0u;
+    std::int32_t field_displacement = 0;
+    std::uint8_t field_width = 0u;
+    bool field_call = false;
+    std::uint8_t receiver_argument_mask = 0u;
+    std::uint32_t origin_call_instruction_address = 0u;
+    std::uint32_t origin_callee_address = 0u;
+    bool optional_null = false;
+    bool complete = false;
+    bool candidate_only = true;
+    bool strict_eligible = false;
+    bool execution_eligible = false;
+
+    [[nodiscard]] bool operator==(
+        const NativeDiscReturnedReceiverFieldCandidate&) const = default;
+};
+
+enum class NativeDiscReturnedReceiverDiagnosticState : std::uint8_t {
+    NotRun,
+    Fresh,
+    ReusedSourceRevalidated,
+    Failed,
+};
+
+struct NativeDiscReturnedReceiverDiagnosticReport final {
+    NativeDiscReturnedReceiverDiagnosticState state =
+        NativeDiscReturnedReceiverDiagnosticState::NotRun;
+    // These two identities are filled only after the owning analysis result
+    // has its final current-generation identity. An old archive never supplies
+    // them or any candidate record by itself.
+    std::string image_analysis_key;
+    std::string analysis_artifact_key;
+    std::size_t program_functions = 0u;
+    std::size_t decoded_instructions = 0u;
+    std::size_t field_sink_contracts = 0u;
+    std::size_t functions_examined = 0u;
+    std::size_t instructions_examined = 0u;
+    std::size_t work_items = 0u;
+    std::size_t work_budget = 0u;
+    std::size_t incomplete_functions = 0u;
+    bool scan_complete = false;
+    bool truncated = false;
+    bool candidate_only = true;
+    bool strict_eligible = false;
+    bool execution_eligible = false;
+    std::string failure_reason;
+    std::vector<NativeDiscReturnedReceiverSummary> returned_receivers;
+    std::vector<NativeDiscReturnedReceiverFieldCandidate> field_candidates;
+};
+
+[[nodiscard]] std::string
+serialize_native_disc_returned_receiver_diagnostic(
+    const NativeDiscReturnedReceiverDiagnosticReport& report);
+
 struct PortExportResult {
     std::filesystem::path output_root;
     std::size_t functions = 0u;
@@ -236,6 +311,8 @@ struct PortExportResult {
     std::string content_identity;
     std::size_t disc_tracks = 0u;
     std::vector<std::string> checkpoints;
+    std::optional<NativeDiscReturnedReceiverDiagnosticReport>
+        returned_receiver_diagnostic;
 };
 
 struct NativeDiscAnalysisSummary {
@@ -272,6 +349,8 @@ struct NativeDiscAnalysisResult {
     katana::analysis::AnalysisGraph control_flow_graph;
     katana::analysis::AnalysisGraph call_graph;
     std::vector<std::uint32_t> latent_external_primary_roots;
+    std::optional<NativeDiscReturnedReceiverDiagnosticReport>
+        returned_receiver_diagnostic;
     // Opaque owning state produced by the same pre-codegen admission pass
     // used by the product exporter.  Keeping it here prevents a following
     // export from repeating CFA/FVA, latent discovery or hardware closure.

@@ -1,8 +1,10 @@
 #include "katana/runtime/block_abi.hpp"
+#include "katana/runtime/code_address_inline.hpp"
 
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -123,6 +125,69 @@ int main() {
                     const ScopedCodeAddressMapping invalid({0x1000u, 0xFFFFFFFEu, 4u});
                 }),
             "Leere oder ueberlaufende Codeadressabbildung wurde akzeptiert.");
+
+    // Sonic's AOT/overlay hot path repeatedly crosses mapped and identity
+    // intervals. Check both directions at the 32-bit edges as well: an
+    // unsigned cache probe must never reuse an interval after subtraction wraps.
+    constexpr std::array edge_mappings = {
+        CodeAddressMapping{0u, 1u, 0xFFFFFFFFu},
+        CodeAddressMapping{1u, 0u, 0xFFFFFFFFu},
+        CodeAddressMapping{0xFFFFFFF0u, 0x10u, 0x10u},
+        CodeAddressMapping{0x10u, 0xFFFFFFF0u, 0x10u}};
+    constexpr std::array edge_addresses = {
+        0u, 1u, 0xFu, 0x10u, 0x1Fu, 0x20u, 0x8C100020u,
+        0xFFFFFFEFu, 0xFFFFFFF0u, 0xFFFFFFFEu, 0xFFFFFFFFu};
+    for (const auto mapping : edge_mappings) {
+        const ScopedCodeAddressMapping scope(mapping);
+        for (unsigned pass = 0u; pass < 3u; ++pass) {
+            for (std::size_t i = 0u; i < edge_addresses.size(); ++i) {
+                const auto address = edge_addresses[(i + pass) % edge_addresses.size()];
+                const auto expected = [&](const bool reverse) {
+                    const auto from = reverse ? mapping.runtime_start : mapping.source_start;
+                    const auto to = reverse ? mapping.source_start : mapping.runtime_start;
+                    return address >= from &&
+                                   static_cast<std::uint64_t>(address) <
+                                       static_cast<std::uint64_t>(from) + mapping.extent
+                               ? to + (address - from) : address;
+                };
+                require(relocate_code_address_inline(address) == expected(false) &&
+                            unrelocate_code_address_inline(address) == expected(true) &&
+                            relocate_code_address(address) == expected(false) &&
+                            unrelocate_code_address(address) == expected(true),
+                        "AOT-Adresscache verliert obere/untere Grenze oder negativen Offset.");
+            }
+        }
+    }
+    require(relocate_code_address(0u) == 0u &&
+                unrelocate_code_address(0xFFFFFFFFu) == 0xFFFFFFFFu,
+            "AOT-Adresscache behaelt einen beendeten Grenzbereich.");
+
+    // A suspended native caller must see the current mapping after a provider
+    // or nested AOT scope changes it. In particular, a popped older owner must
+    // not leave a cached identity gap or alias valid in the generated caller.
+    {
+        require(relocate_code_address_inline(0x82600048u) == 0x82600048u,
+                "Inline-Codeadresscache verliert den leeren Ausgangsscope.");
+        auto older = std::make_unique<ScopedCodeAddressMapping>(
+            CodeAddressMapping{0x82600000u, 0x8C600000u, 0x100u});
+        require(relocate_code_address_inline(0x82600048u) == 0x8C600048u &&
+                    unrelocate_code_address_inline(0x8C600048u) == 0x82600048u,
+                "Inline-Codeadresscache verliert den geladenen Owner.");
+        const ScopedCodeAddressMapping newer({0x82600040u, 0xAC700000u, 0x20u});
+        require(relocate_code_address_inline(0x82600048u) == 0xAC700008u &&
+                    relocate_code_address_inline(0x82600020u) == 0x8C600020u &&
+                    relocate_code_address_inline(0x82600048u) == 0xAC700008u &&
+                    unrelocate_code_address_inline(0xAC700008u) == 0x82600048u,
+                "Inline-Codeadresscache ueberquert den neueren ueberlappenden Owner.");
+        older.reset();
+        require(relocate_code_address_inline(0x82600020u) == 0x82600020u &&
+                    relocate_code_address_inline(0x82600048u) == 0xAC700008u &&
+                    unrelocate_code_address_inline(0x8C600020u) == 0x8C600020u,
+                "Inline-Codeadresscache behaelt einen ausser der Reihe entfernten Owner.");
+    }
+    require(relocate_code_address_inline(0x82600048u) == 0x82600048u &&
+                unrelocate_code_address_inline(0xAC700008u) == 0xAC700008u,
+            "Inline-Codeadresscache behaelt einen beendeten Alias.");
 
     const auto first_exit = backend_a(cpu, context);
     backend_b(cpu, context);

@@ -234,11 +234,11 @@ std::string hex32(const std::uint32_t value) {
 }
 
 std::string relocated_code_address(const std::uint32_t value) {
-    return "katana::runtime::relocate_code_address(" + hex32(value) + ")";
+    return "katana::runtime::relocate_code_address_inline(" + hex32(value) + ")";
 }
 
 std::string unrelocated_code_address(const std::string_view value) {
-    return "katana::runtime::unrelocate_code_address(" + std::string(value) + ")";
+    return "katana::runtime::unrelocate_code_address_inline(" + std::string(value) + ")";
 }
 
 std::string guarded_switch_address(
@@ -6215,6 +6215,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
             : "katana::runtime::PlatformServices";
 
     declarations << "#include \"" << runtime_header << "\"\n"
+                 << "#include \"katana/runtime/code_address_inline.hpp\"\n"
                  << "#include <cstdint>\n"
                  << "#include <stdexcept>\n\n"
                  << "namespace " << request.symbol_namespace << " {\n\n"
@@ -6251,7 +6252,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                  << "                katana::runtime::canonical_physical_address_inline("
                     "canonical) |\n"
                  << "                0x80000000u;\n"
-                 << "        return katana::runtime::unrelocate_code_address("
+                 << "        return katana::runtime::unrelocate_code_address_inline("
                     "canonical);\n"
                  << "    };\n"
                  << "    return source(target) == source(allowed_target);\n"
@@ -6333,7 +6334,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                         "        auto canonical = address; \\\n"
                         "        if ((canonical >> 29u) < 6u) canonical = \\\n"
                         "            katana::runtime::canonical_physical_address_inline(canonical) | 0x80000000u; \\\n"
-                        "        return katana::runtime::unrelocate_code_address(canonical); \\\n"
+                        "        return katana::runtime::unrelocate_code_address_inline(canonical); \\\n"
                         "    }; \\\n"
                         "    if (exact_guarded_source((target)) != exact_guarded_source((allowed))) \\\n"
                         "        throw std::runtime_error(\"exact static target mismatch\"); \\\n"
@@ -6344,7 +6345,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                         "        auto canonical = address; \\\n"
                         "        if ((canonical >> 29u) < 6u) canonical = \\\n"
                         "            katana::runtime::canonical_physical_address_inline(canonical) | 0x80000000u; \\\n"
-                        "        return katana::runtime::unrelocate_code_address(canonical); \\\n"
+                        "        return katana::runtime::unrelocate_code_address_inline(canonical); \\\n"
                         "    }; \\\n"
                         "    if (exact_guarded_source((target)) != exact_guarded_source((allowed))) \\\n"
                         "        throw std::runtime_error(\"exact static target mismatch\"); \\\n"
@@ -6597,7 +6598,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
         }
         emitted_function
             << "    for (;;) {\n"
-            << "        switch (katana::runtime::unrelocate_code_address(cpu.pc)) {\n";
+            << "        switch (katana::runtime::unrelocate_code_address_inline(cpu.pc)) {\n";
 
         std::unordered_set<std::uint32_t> all_current_entries;
         all_current_entries.reserve(function.blocks.size());

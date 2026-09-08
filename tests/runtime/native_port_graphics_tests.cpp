@@ -1080,6 +1080,84 @@ void require_runtime_options_menu(
                 "SerialReference praesentierte ohne Produzentenaufruf.");
         return;
     }
+
+    // A full flip-model queue must defer one autonomous presentation instead
+    // of blocking the render owner. The same completed image is presented on
+    // the next deadline without becoming a repeated or newly drawn frame.
+    {
+        ScopedEnvironmentOverride inject_present_busy(
+            "KATANA_PORT_TEST_PRESENT_BUSY", "1");
+        auto busy_config = config;
+        busy_config.title = "Katana Nonblocking Present Busy Recovery";
+        NativePortFramePacingConfig busy_pacing;
+        busy_pacing.simulation_rate_hz = 30u;
+        busy_pacing.presentation_rate_hz = 30u;
+        busy_pacing.maximum_presentation_rate_hz = 144u;
+        NativePortDesktopHost busy_host(busy_config, busy_pacing);
+        constexpr std::array busy_vertices{
+            NativePortVertex{{-0.75f, -0.75f, 0.0f}},
+            NativePortVertex{{0.75f, -0.75f, 0.0f}},
+            NativePortVertex{{0.0f, 0.75f, 0.0f}},
+        };
+        NativePortDrawPacket busy_packet;
+        busy_packet.vertices = busy_vertices;
+        busy_packet.batch.identity = 0x7300u;
+        busy_packet.batch.submission_order = 1u;
+        const auto before_busy = busy_host.frame_pacing_snapshot();
+        const auto draws_before_busy =
+            busy_host.graphics().completed_drawn_frames_nonblocking();
+        const auto backend_before_busy = busy_host.graphics().snapshot();
+
+        busy_host.begin_frame(0u);
+        busy_host.graphics().draw(busy_packet);
+        busy_host.present_frame(0u);
+        busy_host.graphics().finish();
+        const auto deferred = busy_host.frame_pacing_snapshot();
+        const auto backend_deferred = busy_host.graphics().snapshot();
+        require(deferred.presentation_frames ==
+                    before_busy.presentation_frames &&
+                    deferred.repeated_presentations ==
+                    before_busy.repeated_presentations &&
+                    deferred.missed_presentation_deadlines ==
+                    before_busy.missed_presentation_deadlines + 1u &&
+                    busy_host.graphics().completed_drawn_frames_nonblocking() ==
+                    draws_before_busy + 1u &&
+                    backend_deferred.failed_commands ==
+                    backend_before_busy.failed_commands,
+                "DXGI-WAS-STILL-DRAWING mutierte Framezaehler oder wurde fatal.");
+
+        for (std::uint32_t attempt = 0u;
+             attempt < 500u &&
+             busy_host.frame_pacing_snapshot().presentation_frames ==
+                 deferred.presentation_frames;
+             ++attempt)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        busy_host.graphics().finish();
+        const auto retained = busy_host.frame_pacing_snapshot();
+        require(retained.presentation_frames ==
+                    deferred.presentation_frames + 1u &&
+                    retained.repeated_presentations ==
+                    deferred.repeated_presentations &&
+                    busy_host.graphics().completed_drawn_frames_nonblocking() ==
+                    draws_before_busy + 1u,
+                "Das nach Busy behaltene CompletedImage wurde nicht einmalig "
+                "als Erstpraesentation ausgegeben.");
+
+        busy_host.begin_frame(1u);
+        busy_packet.batch.identity = 0x7301u;
+        busy_host.graphics().draw(busy_packet);
+        busy_host.present_frame(1u);
+        busy_host.graphics().finish();
+        const auto continued = busy_host.frame_pacing_snapshot();
+        require(continued.presentation_frames ==
+                    retained.presentation_frames + 1u &&
+                    continued.repeated_presentations ==
+                    retained.repeated_presentations &&
+                    busy_host.graphics().completed_drawn_frames_nonblocking() ==
+                    draws_before_busy + 2u,
+                "Der Renderpfad setzte nach dem deferred Present nicht fort.");
+    }
+
     // Sonic's slow title thread must not stop output of its last completed
     // image. No host calls or new simulation boundary drive these repeats.
     host.begin_frame(0u);
@@ -1123,7 +1201,7 @@ void require_runtime_options_menu(
 
 } // namespace
 
-int main(const int argc, char** const argv) {
+int main(const int argc, char** const argv) try {
 #ifndef _WIN32
     return EXIT_SUCCESS;
 #else
@@ -2040,4 +2118,12 @@ int main(const int argc, char** const argv) {
 
     return EXIT_SUCCESS;
 #endif
+} catch (const katana::runtime::NativePortGraphicsError& error) {
+    std::cerr << "UNEXPECTED GRAPHICS ERROR: " << error.what()
+              << " failure=" << static_cast<unsigned>(error.failure())
+              << " platform=" << error.platform_error_code() << '\n';
+    return EXIT_FAILURE;
+} catch (const std::exception& error) {
+    std::cerr << "UNEXPECTED EXCEPTION: " << error.what() << '\n';
+    return EXIT_FAILURE;
 }

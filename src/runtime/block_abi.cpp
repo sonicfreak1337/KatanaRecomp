@@ -1,4 +1,5 @@
 #include "katana/runtime/block_abi.hpp"
+#include "katana/runtime/code_address_inline.hpp"
 
 #include <algorithm>
 #include <array>
@@ -10,6 +11,15 @@
 #include <vector>
 
 namespace katana::runtime {
+
+namespace code_address_detail {
+
+// With no active scope every 32-bit address is an identity mapping.
+constinit thread_local LookupInterval relocated{0x100000000ull, 0u, 0u};
+constinit thread_local LookupInterval unrelocated{0x100000000ull, 0u, 0u};
+
+} // namespace code_address_detail
+
 namespace {
 
 struct ActiveCodeAddressMapping {
@@ -25,11 +35,19 @@ thread_local std::uint64_t next_code_address_mapping_token = 1u;
 // performs two comparisons for every generated instruction address.
 thread_local bool code_address_mapping_active = false;
 
-struct CodeAddressLookupCacheEntry final {
-    std::uint64_t begin = 0u;
-    std::uint64_t end = 0u;
-    std::int64_t delta = 0;
-};
+using CodeAddressLookupCacheEntry = code_address_detail::LookupInterval;
+using code_address_detail::relocated;
+using code_address_detail::unrelocated;
+
+static_assert(sizeof(CodeAddressLookupCacheEntry) == 16u);
+
+bool lookup_cache_contains(const CodeAddressLookupCacheEntry& cached,
+                           const std::uint32_t address) noexcept {
+    // For an address below begin the unsigned difference wraps to a value
+    // at least 2^32-begin, while every valid extent is <= 2^32-begin.
+    // Thus one offset comparison rejects both sides, including wraparound.
+    return static_cast<std::uint64_t>(address - cached.begin) < cached.extent;
+}
 
 constexpr std::size_t code_address_lookup_cache_size = 64u;
 static_assert((code_address_lookup_cache_size &
@@ -40,8 +58,6 @@ thread_local std::array<CodeAddressLookupCacheEntry,
 thread_local std::array<CodeAddressLookupCacheEntry,
                         code_address_lookup_cache_size>
     unrelocate_code_address_cache;
-thread_local CodeAddressLookupCacheEntry relocate_code_address_recent;
-thread_local CodeAddressLookupCacheEntry unrelocate_code_address_recent;
 
 constexpr std::uint64_t guest_address_space_extent =
     static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u;
@@ -63,10 +79,11 @@ void invalidate_code_address_lookup_cache() noexcept {
     // Mapping changes are rare. An empty interval is sufficient to invalidate
     // an entry, avoiding both a generation load on every lookup and needless
     // writes to the cached range/delta fields.
-    for (auto& cached : relocate_code_address_cache) cached.end = 0u;
-    for (auto& cached : unrelocate_code_address_cache) cached.end = 0u;
-    relocate_code_address_recent.end = 0u;
-    unrelocate_code_address_recent.end = 0u;
+    for (auto& cached : relocate_code_address_cache) cached.extent = 0u;
+    for (auto& cached : unrelocate_code_address_cache) cached.extent = 0u;
+    relocated = {code_address_mapping_active ? 0u : guest_address_space_extent,
+                 0u, 0u};
+    unrelocated = relocated;
 }
 
 #if defined(_MSC_VER)
@@ -82,18 +99,15 @@ KATANA_BLOCK_ABI_NOINLINE std::uint32_t
 lookup_code_address_slow(const std::uint32_t address) noexcept {
     auto& cache = Reverse ? unrelocate_code_address_cache
                           : relocate_code_address_cache;
-    auto& recent = Reverse ? unrelocate_code_address_recent
-                           : relocate_code_address_recent;
+    auto& recent = Reverse ? unrelocated : relocated;
     const auto cache_index =
         ((static_cast<std::size_t>(address) >> 12u) ^
          (static_cast<std::size_t>(address) >> 20u)) &
         (code_address_lookup_cache_size - 1u);
     auto& cached = cache[cache_index];
-    if (static_cast<std::uint64_t>(address) >= cached.begin &&
-        static_cast<std::uint64_t>(address) < cached.end) {
+    if (lookup_cache_contains(cached, address)) {
         recent = cached;
-        return static_cast<std::uint32_t>(
-            static_cast<std::int64_t>(address) + cached.delta);
+        return address + cached.delta;
     }
 
     std::uint64_t begin = 0u;
@@ -139,20 +153,17 @@ lookup_code_address_slow(const std::uint32_t address) noexcept {
         for (const auto& mapping : active_code_address_mappings)
             constrain_gap(mapping.mapping);
     }
-    cached = {begin, end, delta};
+    cached = {end - begin, static_cast<std::uint32_t>(begin),
+              static_cast<std::uint32_t>(delta)};
     recent = cached;
-    return static_cast<std::uint32_t>(
-        static_cast<std::int64_t>(address) + delta);
+    return address + cached.delta;
 }
 
 template <bool Reverse>
 std::uint32_t lookup_code_address(const std::uint32_t address) noexcept {
-    auto& recent = Reverse ? unrelocate_code_address_recent
-                           : relocate_code_address_recent;
-    if (static_cast<std::uint64_t>(address) >= recent.begin &&
-        static_cast<std::uint64_t>(address) < recent.end)
-        return static_cast<std::uint32_t>(
-            static_cast<std::int64_t>(address) + recent.delta);
+    auto& recent = Reverse ? unrelocated : relocated;
+    if (lookup_cache_contains(recent, address))
+        return address + recent.delta;
     return lookup_code_address_slow<Reverse>(address);
 }
 

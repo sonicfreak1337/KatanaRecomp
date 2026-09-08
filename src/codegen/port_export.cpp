@@ -4,6 +4,7 @@
 #include "native_aot_resume.hpp"
 
 #include "../analysis/guarded_native_entry_shape.hpp"
+#include "../analysis/returned_receiver_diagnostic.hpp"
 #include "../analysis/static_callback_inventory.hpp"
 
 #include "katana/build_contract.hpp"
@@ -5281,6 +5282,7 @@ std::vector<MmioWaitLoopBatchProof> mmio_wait_loop_batch_proofs(
 
 std::string generated_header(const std::string& entry_namespace) {
     return "#pragma once\n\n"
+           "#include \"katana/runtime/code_address_inline.hpp\"\n"
            "#include \"katana/runtime/block_table.hpp\"\n"
            "#include \"katana/runtime/crash_capsule.hpp\"\n"
            "#include \"katana/runtime/disc.hpp\"\n"
@@ -7537,10 +7539,10 @@ std::string handwritten_main(
            "        if (!local_block_chaining_enabled_)\n"
            "            return reject(Rejection::ChainingDisabled);\n"
            "        const auto source_address =\n"
-           "            katana::runtime::unrelocate_code_address(\n"
+           "            katana::runtime::unrelocate_code_address_inline(\n"
            "                cpu_.active_instruction_pc);\n"
            "        const auto target_address =\n"
-           "            katana::runtime::unrelocate_code_address(address);\n"
+           "            katana::runtime::unrelocate_code_address_inline(address);\n"
            "        if (std::any_of(\n"
            "                native_mmio_wait_backedges.begin(),\n"
            "                native_mmio_wait_backedges.end(),\n"
@@ -14993,7 +14995,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
               "            katana::runtime::canonical_physical_address(canonical_target) |\n"
               "            0x80000000u;\n"
               "    const auto source =\n"
-              "        katana::runtime::unrelocate_code_address(canonical_target);\n"
+              "        katana::runtime::unrelocate_code_address_inline(canonical_target);\n"
               "    thread_local std::uint32_t cached_source = 0u;\n"
               "    thread_local const StaticReturnNopCallbackProof* cached_proof = nullptr;\n"
               "    if (cached_proof == nullptr || cached_source != source) {\n"
@@ -15003,7 +15005,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
               "    if (cached_proof == nullptr ||\n"
               "        !active_services->can_chain_executable_block(target))\n"
               "        return false;\n"
-              "    const auto instruction_pc = katana::runtime::relocate_code_address(\n"
+              "    const auto instruction_pc = katana::runtime::relocate_code_address_inline(\n"
               "        cached_proof->source_address);\n"
               "    katana::runtime::ExplicitGuestInstructionAttempt return_attempt(\n"
               "        cpu, instruction_pc, cached_proof->return_guest_cycles);\n"
@@ -16080,7 +16082,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "        canonical =\n"
            "            katana::runtime::canonical_physical_address(canonical) |\n"
            "            0x80000000u;\n"
-           "    return katana::runtime::unrelocate_code_address(canonical);\n"
+           "    return katana::runtime::unrelocate_code_address_inline(canonical);\n"
            "}\n"
            "[[nodiscard]] bool exact_guarded_target_matches(\n"
            "    const std::uint32_t target,\n"
@@ -16671,6 +16673,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
 std::string native_product_generated_header(
     const std::string& entry_namespace) {
     return "#pragma once\n\n"
+           "#include \"katana/runtime/code_address_inline.hpp\"\n"
            "#include \"katana/runtime/native_port.hpp\"\n\n"
            "namespace " +
            entry_namespace +
@@ -19748,7 +19751,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "            katana::runtime::canonical_physical_address(canonical_target) |\n"
               "            0x80000000u;\n"
               "    const auto source =\n"
-              "        katana::runtime::unrelocate_code_address(canonical_target);\n"
+              "        katana::runtime::unrelocate_code_address_inline(canonical_target);\n"
               "    thread_local std::uint32_t cached_source = 0u;\n"
               "    thread_local const StaticReturnNopCallbackProof* cached_proof = nullptr;\n"
               "    if (cached_proof == nullptr || cached_source != source) {\n"
@@ -19758,7 +19761,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "    if (cached_proof == nullptr ||\n"
               "        !active_services->can_chain_executable_block(target))\n"
               "        return false;\n"
-              "    const auto instruction_pc = katana::runtime::relocate_code_address(\n"
+              "    const auto instruction_pc = katana::runtime::relocate_code_address_inline(\n"
               "        cached_proof->source_address);\n"
               "    katana::runtime::ExplicitGuestInstructionAttempt return_attempt(\n"
               "        cpu, instruction_pc, cached_proof->return_guest_cycles);\n"
@@ -20024,7 +20027,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        canonical =\n"
               "            katana::runtime::canonical_physical_address(canonical) |\n"
               "            0x80000000u;\n"
-              "    return katana::runtime::unrelocate_code_address(canonical);\n"
+              "    return katana::runtime::unrelocate_code_address_inline(canonical);\n"
               "}\n"
               "bool static_chainable_source_address(\n"
               "    std::uint32_t source) noexcept {\n"
@@ -22006,7 +22009,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        canonical =\n"
               "            katana::runtime::canonical_physical_address(canonical) |\n"
               "            0x80000000u;\n"
-              "    return katana::runtime::unrelocate_code_address(canonical);\n"
+              "    return katana::runtime::unrelocate_code_address_inline(canonical);\n"
               "}\n"
               "[[nodiscard]] bool exact_guarded_target_matches(\n"
               "    const std::uint32_t target,\n"
@@ -26565,6 +26568,211 @@ void require_unique_loaded_module_template_ids(
 }
 
 } // namespace
+
+namespace {
+
+constexpr std::size_t maximum_native_disc_returned_receiver_work_items =
+    16u * 1024u * 1024u;
+
+[[nodiscard]] std::string_view native_disc_returned_receiver_state_name(
+    const NativeDiscReturnedReceiverDiagnosticState state) noexcept {
+    switch (state) {
+    case NativeDiscReturnedReceiverDiagnosticState::NotRun:
+        return "not-run";
+    case NativeDiscReturnedReceiverDiagnosticState::Fresh:
+        return "fresh";
+    case NativeDiscReturnedReceiverDiagnosticState::ReusedSourceRevalidated:
+        return "reused-source-revalidated";
+    case NativeDiscReturnedReceiverDiagnosticState::Failed:
+        return "failed";
+    }
+    return "unknown";
+}
+
+[[nodiscard]] NativeDiscReturnedReceiverDiagnosticReport
+make_native_disc_returned_receiver_diagnostic(
+    const katana::io::ExecutableImage& image,
+    const katana::analysis::ControlFlowAnalysisResult& analysis,
+    const std::span<const katana::ir::Function> program,
+    const NativeDiscReturnedReceiverDiagnosticState state) {
+    NativeDiscReturnedReceiverDiagnosticReport report;
+    report.state = state;
+    report.program_functions = program.size();
+    report.decoded_instructions = analysis.recursive.instructions.size();
+    report.field_sink_contracts = analysis.static_callback_field_sinks.size();
+    report.candidate_only = true;
+    report.strict_eligible = false;
+    report.execution_eligible = false;
+
+    try {
+        const auto inventory =
+            katana::analysis::detail::discover_static_returned_receiver_contracts(
+                image, program, analysis.recursive.instructions,
+                analysis.static_callback_field_sinks,
+                maximum_native_disc_returned_receiver_work_items);
+        report.functions_examined = inventory.functions_examined;
+        report.instructions_examined = inventory.instructions_examined;
+        report.work_items = inventory.work_items;
+        report.work_budget = inventory.work_budget;
+        report.incomplete_functions = inventory.incomplete_functions;
+        report.truncated = inventory.truncated;
+        report.scan_complete = !inventory.truncated &&
+                               inventory.incomplete_functions == 0u;
+
+        report.returned_receivers.reserve(inventory.returned_receivers.size());
+        for (const auto& summary : inventory.returned_receivers) {
+            report.returned_receivers.push_back(
+                NativeDiscReturnedReceiverSummary{
+                    summary.function_address,
+                    summary.origin.call_instruction_address,
+                    summary.origin.callee_address,
+                    summary.optional_null,
+                    summary.complete,
+                    summary.candidate_only,
+                    summary.strict_eligible,
+                    summary.execution_eligible});
+        }
+
+        report.field_candidates.reserve(inventory.field_candidates.size());
+        for (const auto& candidate : inventory.field_candidates) {
+            report.field_candidates.push_back(
+                NativeDiscReturnedReceiverFieldCandidate{
+                    candidate.field.function_address,
+                    candidate.field.call_instruction_address,
+                    candidate.field.load_instruction_address,
+                    candidate.field.displacement,
+                    candidate.field.width,
+                    candidate.field.call,
+                    candidate.field.receiver_argument_mask,
+                    candidate.origin.call_instruction_address,
+                    candidate.origin.callee_address,
+                    candidate.optional_null,
+                    candidate.complete,
+                    candidate.candidate_only,
+                    candidate.strict_eligible,
+                    candidate.execution_eligible});
+        }
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception&) {
+        report.state = NativeDiscReturnedReceiverDiagnosticState::Failed;
+        report.scan_complete = false;
+        report.failure_reason = "returned-receiver-diagnostic-exception";
+    } catch (...) {
+        report.state = NativeDiscReturnedReceiverDiagnosticState::Failed;
+        report.scan_complete = false;
+        report.failure_reason = "returned-receiver-diagnostic-exception";
+    }
+    return report;
+}
+
+void serialize_native_disc_returned_receiver_summary(
+    std::ostringstream& output,
+    const NativeDiscReturnedReceiverSummary& summary) {
+    output << "{\"function_address\":" << summary.function_address
+           << ",\"call_instruction_address\":"
+           << summary.call_instruction_address
+           << ",\"callee_address\":" << summary.callee_address
+           << ",\"optional_null\":"
+           << (summary.optional_null ? "true" : "false")
+           << ",\"complete\":"
+           << (summary.complete ? "true" : "false")
+           << ",\"candidate_only\":"
+           << (summary.candidate_only ? "true" : "false")
+           << ",\"strict_eligible\":"
+           << (summary.strict_eligible ? "true" : "false")
+           << ",\"execution_eligible\":"
+           << (summary.execution_eligible ? "true" : "false") << '}';
+}
+
+void serialize_native_disc_returned_receiver_field_candidate(
+    std::ostringstream& output,
+    const NativeDiscReturnedReceiverFieldCandidate& candidate) {
+    output << "{\"function_address\":" << candidate.function_address
+           << ",\"field_call_instruction_address\":"
+           << candidate.field_call_instruction_address
+           << ",\"field_load_instruction_address\":"
+           << candidate.field_load_instruction_address
+           << ",\"field_displacement\":" << candidate.field_displacement
+           << ",\"field_width\":"
+           << static_cast<unsigned>(candidate.field_width)
+           << ",\"field_call\":"
+           << (candidate.field_call ? "true" : "false")
+           << ",\"receiver_argument_mask\":"
+           << static_cast<unsigned>(candidate.receiver_argument_mask)
+           << ",\"origin_call_instruction_address\":"
+           << candidate.origin_call_instruction_address
+           << ",\"origin_callee_address\":"
+           << candidate.origin_callee_address
+           << ",\"optional_null\":"
+           << (candidate.optional_null ? "true" : "false")
+           << ",\"complete\":"
+           << (candidate.complete ? "true" : "false")
+           << ",\"candidate_only\":"
+           << (candidate.candidate_only ? "true" : "false")
+           << ",\"strict_eligible\":"
+           << (candidate.strict_eligible ? "true" : "false")
+           << ",\"execution_eligible\":"
+           << (candidate.execution_eligible ? "true" : "false")
+           << '}';
+}
+
+} // namespace
+
+std::string serialize_native_disc_returned_receiver_diagnostic(
+    const NativeDiscReturnedReceiverDiagnosticReport& report) {
+    std::ostringstream output;
+    output << "{\"schema\":1"
+           << ",\"kind\":\"katana-native-disc-returned-receiver-"
+              "diagnostic\""
+           << ",\"state\":"
+           << katana::io::quote_json(
+                  native_disc_returned_receiver_state_name(report.state))
+           << ",\"image_analysis_key\":"
+           << katana::io::quote_json(report.image_analysis_key)
+           << ",\"analysis_artifact_key\":"
+           << katana::io::quote_json(report.analysis_artifact_key)
+           << ",\"program_functions\":" << report.program_functions
+           << ",\"decoded_instructions\":"
+           << report.decoded_instructions
+           << ",\"field_sink_contracts\":"
+           << report.field_sink_contracts
+           << ",\"functions_examined\":" << report.functions_examined
+           << ",\"instructions_examined\":"
+           << report.instructions_examined
+           << ",\"work_items\":" << report.work_items
+           << ",\"work_budget\":" << report.work_budget
+           << ",\"incomplete_functions\":"
+           << report.incomplete_functions
+           << ",\"scan_complete\":"
+           << (report.scan_complete ? "true" : "false")
+           << ",\"truncated\":"
+           << (report.truncated ? "true" : "false")
+           << ",\"candidate_only\":"
+           << (report.candidate_only ? "true" : "false")
+           << ",\"strict_eligible\":"
+           << (report.strict_eligible ? "true" : "false")
+           << ",\"execution_eligible\":"
+           << (report.execution_eligible ? "true" : "false")
+           << ",\"failure_reason\":"
+           << katana::io::quote_json(report.failure_reason)
+           << ",\"returned_receivers\":[";
+    for (std::size_t index = 0u; index < report.returned_receivers.size();
+         ++index) {
+        if (index != 0u) output << ',';
+        serialize_native_disc_returned_receiver_summary(
+            output, report.returned_receivers[index]);
+    }
+    output << "],\"field_candidates\":[";
+    for (std::size_t index = 0u; index < report.field_candidates.size();
+         ++index) {
+        if (index != 0u) output << ',';
+        serialize_native_disc_returned_receiver_field_candidate(
+            output, report.field_candidates[index]);
+    }
+    output << "]}";
+    return output.str();
+}
 
 void validate_analysis_generation_game_project_delta(
     const katana::runtime::GameProjectDefinition& baseline,
@@ -42006,6 +42214,18 @@ try_reuse_native_disc_analysis_artifact(
                 options,
                 "native-disc-analysis-program-index-site-provenance-repaired");
         }
+        // Re-run the diagnostic once on the freshly source-revalidated image
+        // and archive IR.  No serialized diagnostic is consumed from the old
+        // archive, so reuse cannot invent findings from stale metadata.
+        result.returned_receiver_diagnostic =
+            make_native_disc_returned_receiver_diagnostic(
+                result.image, result.analysis, result.program,
+                NativeDiscReturnedReceiverDiagnosticState::
+                    ReusedSourceRevalidated);
+        result.returned_receiver_diagnostic->image_analysis_key =
+            result.analysis_artifact_identity.image_analysis_key;
+        result.returned_receiver_diagnostic->analysis_artifact_key =
+            result.analysis_artifact_identity.key;
         if (options.agent_analysis_artifacts_requested)
             populate_native_disc_materialization_artifacts(result, options);
         report_progress(
@@ -44848,6 +45068,16 @@ NativeDiscAnalysisResult analyze_native_disc_port(
     }
     // KATANA_COMPONENT_IDENTITY_REGION_END native-disc-root-discovery
 
+    // Run this bounded inventory once after authoritative root discovery and
+    // before optimization changes its instruction stream. Its records never
+    // feed discovery, admission, or the authoritative cache identity.
+    auto returned_receiver_diagnostic =
+        make_native_disc_returned_receiver_diagnostic(
+            image,
+            prepared_analysis.artifact.analysis,
+            prepared_analysis.artifact.lowered_program,
+            NativeDiscReturnedReceiverDiagnosticState::Fresh);
+
     auto& analysis = prepared_analysis.artifact.analysis;
     auto& program = prepared_analysis.artifact.lowered_program;
     report_progress(options, "ir-optimization");
@@ -45034,6 +45264,12 @@ NativeDiscAnalysisResult analyze_native_disc_port(
             analysis_artifact_identity);
     result.analysis_artifact_identity =
         std::move(analysis_artifact_identity);
+    returned_receiver_diagnostic.image_analysis_key =
+        result.analysis_artifact_identity.image_analysis_key;
+    returned_receiver_diagnostic.analysis_artifact_key =
+        result.analysis_artifact_identity.key;
+    result.returned_receiver_diagnostic =
+        std::move(returned_receiver_diagnostic);
     publish_native_disc_analysis_artifact(result, options);
     if (options.agent_analysis_artifacts_requested)
         populate_native_disc_materialization_artifacts(result, options);
@@ -45298,6 +45534,12 @@ PortExportResult export_dreamcast_port_project(
         &analyzed.analysis_artifact_identity,
         false,
         analysis_mode != PortAnalysisMode::ConservativeRuntimeOnly);
+    if (analyzed.returned_receiver_diagnostic.has_value()) {
+        report.returned_receiver_diagnostic =
+            std::move(analyzed.returned_receiver_diagnostic);
+        report.checkpoints.push_back(
+            "returned-receiver-diagnostic-published");
+    }
     report.boot_analysis_cache_hit = analyzed.boot_analysis_cache_hit;
     report.boot_analysis_pipeline_runs =
         analyzed.boot_analysis_pipeline_runs;

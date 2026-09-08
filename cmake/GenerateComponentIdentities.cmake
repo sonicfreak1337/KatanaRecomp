@@ -394,6 +394,46 @@ if(katana_write_component_header)
          "${katana_component_header}")
 endif()
 
+function(katana_component_json_string output value)
+    string(REPLACE "\\" "\\\\" value "${value}")
+    string(REPLACE "\"" "\\\"" value "${value}")
+    string(REPLACE "\n" "\\n" value "${value}")
+    string(REPLACE "\r" "\\r" value "${value}")
+    string(REPLACE "\t" "\\t" value "${value}")
+    set(${output} "\"${value}\"" PARENT_SCOPE)
+endfunction()
+
+# Preserve the exact hashed material, including transitive source/region
+# digests and toolchain flags. This is diagnostic evidence only: it never
+# substitutes for the identities embedded in the executable or authorizes
+# checkpoint reuse. A lost transient input must remain explainable later.
+set(katana_component_material_json
+    "{\n  \"contract\": 1,\n  \"observational_only\": true,\n  \"components\": {")
+set(katana_component_material_separator "")
+foreach(katana_component_name IN ITEMS
+        analysis analysis_cache ir_analysis ir_product ir codegen
+        partition_codegen orchestration materialization_world)
+    set(katana_component_material "${katana_${katana_component_name}_material}")
+    string(SHA256 katana_component_material_sha256 "${katana_component_material}")
+    katana_component_json_string(katana_component_material_escaped
+        "${katana_component_material}")
+    string(APPEND katana_component_material_json
+        "${katana_component_material_separator}\n    \"${katana_component_name}\": {"
+        "\"sha256\": \"${katana_component_material_sha256}\", "
+        "\"material\": ${katana_component_material_escaped}}")
+    set(katana_component_material_separator ",")
+endforeach()
+string(APPEND katana_component_material_json "\n  }\n}\n")
+set(katana_component_material_path
+    "${KATANA_COMPONENT_IDENTITY_OUTPUT}.materials.json")
+set(katana_existing_component_material "")
+if(EXISTS "${katana_component_material_path}")
+    file(READ "${katana_component_material_path}" katana_existing_component_material)
+endif()
+if(NOT katana_existing_component_material STREQUAL katana_component_material_json)
+    file(WRITE "${katana_component_material_path}" "${katana_component_material_json}")
+endif()
+
 get_filename_component(
     katana_component_stamp_directory
     "${KATANA_COMPONENT_IDENTITY_STAMP}"

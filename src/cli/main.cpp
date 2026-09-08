@@ -14407,6 +14407,13 @@ int export_port_project(const std::filesystem::path& source_path,
                 analysis_archive_path->filename().string());
         else
             report << "null";
+        report << ",\"returned_receiver_diagnostic\":";
+        if (analyzed.returned_receiver_diagnostic.has_value())
+            report << katana::codegen::
+                serialize_native_disc_returned_receiver_diagnostic(
+                    *analyzed.returned_receiver_diagnostic);
+        else
+            report << "null";
         report
                << "}\n";
         const auto serialized = report.str();
@@ -14653,6 +14660,29 @@ int export_port_project(const std::filesystem::path& source_path,
                     report,
                     port_progress);
         }
+        // Diagnostic evidence lives outside the entire distribution workspace
+        // and cannot change its cache identity. Always replace the record so a
+        // whole-export hit cannot present an older scan as current evidence.
+        auto receiver_diagnostic = report.returned_receiver_diagnostic.value_or(
+            katana::codegen::NativeDiscReturnedReceiverDiagnosticReport{});
+        if (!report.returned_receiver_diagnostic.has_value())
+            receiver_diagnostic.failure_reason = whole_export_cache_hit
+                ? "whole-export-cache-hit-no-fresh-diagnostic"
+                : "export-path-without-returned-receiver-diagnostic";
+        const auto receiver_diagnostic_text = katana::codegen::
+            serialize_native_disc_returned_receiver_diagnostic(receiver_diagnostic);
+        const auto receiver_diagnostic_path = workspace.parent_path() /
+            (workspace.filename().string() + ".returned-receiver-diagnostic.json");
+        write_atomic_analysis_file(workspace.parent_path(), receiver_diagnostic_path,
+            receiver_diagnostic_text, "Returned-Receiver-Diagnose");
+        std::cout << "KATANA_RETURNED_RECEIVER_DIAGNOSTIC path="
+                  << receiver_diagnostic_path.generic_string()
+                  << " sha256=" << katana::io::sha256_bytes(receiver_diagnostic_text)
+                  << " summaries=" << receiver_diagnostic.returned_receivers.size()
+                  << " fields=" << receiver_diagnostic.field_candidates.size()
+                  << " complete=" << receiver_diagnostic.scan_complete
+                  << " candidate_only=1\n" << std::flush;
+
         const auto build_profile =
             configured_environment_value("KATANA_PORT_BUILD_PROFILE")
                 .value_or("bringup");
@@ -15180,7 +15210,9 @@ int export_port_project(const std::filesystem::path& source_path,
                 limit == 0u || limit > 100000u)
                 throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                     "AOT compile budget requires Ninja and a limit of 1..100000.");
-            const auto plan_path = host_build_event_root / "incremental-plan.log";
+            // The event root admits only authenticated launcher events.
+            // Keeping plan evidence there invalidates every observer scan.
+            const auto plan_path = build_path / ".katana-host-build-plan.log";
             const auto plan = std::string("cmake --build ") +
                 shell_quote(build_path) + " --target " + target_name +
                 " -- -n -d explain > " + shell_quote(plan_path) + " 2>&1";
