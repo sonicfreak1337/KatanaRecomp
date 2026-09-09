@@ -1,14 +1,13 @@
 # KatanaRecomp
 
-**Aktuelle Version: 0.49.4**
+**Aktuelle Entwicklungsversion: 0.49.5**
 
-Entwicklungsstand r328 ist exportiert; den Spieltest uebernimmt der Nutzer.
-Der Nutzer hat am 9. September
-2026 die Tails-Kampagne in Sonic Adventure mit r327 vollstaendig beendet.
-Die Credits-Schrift ist noch fehlerhaft; der Uebergang nach dem Abspann
-endete in r327 mit einem Crash; r328 enthaelt einen noch im Spiel zu bestaetigenden
-Texture-Lebensdauer-Fix dafuer. Dieser Meilenstein ist keine
-Abnahme der anderen Kampagnen oder der gesamten Grafikpipeline.
+Entwicklungsstand r329/0.49.4 ist exportiert; den Spieltest uebernimmt der Nutzer.
+Am 9. September 2026 bestaetigt er die beendete Big-Kampagne in r329,
+nach der Tails-Kampagne in r327. Die naechste Version wird deshalb 0.49.5.
+Die Credits-Schrift bleibt bei beiden Kampagnen fehlerhaft. Der Uebergang
+nach Bigs Abspann ist noch nicht separat bestaetigt. Diese Meilensteine sind
+keine Abnahme der anderen Kampagnen oder der gesamten Grafikpipeline.
 
 KatanaRecomp ist ein C++20-Framework fuer die statische Rekompilierung von
 Dreamcast-SH-4-Programmen in native PC-Ports. Das Projekt ist Pre-Alpha:

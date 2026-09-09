@@ -7,6 +7,18 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (9. September 2026)
 
+- Der Nutzer hat r329 mit "go" und "du darfst bauen. moeglichst inkrementell"
+  ausdruecklich freigegeben. Der vorbereitete Boss-/Uebergangsbatch inklusive
+  Chaos 7 verwendet den bestehenden Performance-Buildbaum. Der r328-
+  Analysecheckpoint lehnt die veraenderte Rootmenge korrekt ab; vorhandene
+  Root-/Modul-Caches bleiben aktiv. Der gepruefte Ninja-Plan enthaelt genau
+  35 neue/veraenderte AOT-Dateien, 1.063 bleiben bytegleich, alle gemeinsamen
+  generierten Header bleiben unveraendert. Nur fuer diesen Batch gilt deshalb
+  das belegte Compilebudget 35 statt 32. Spieltests bleiben beim Nutzer.
+- Der r329-Quellbatch behandelt die fuenf neuen r328-Storycrashes sowie
+  aehnliche Boss-/Uebergangsfamilien. Zusaetzliche Performanceoptimierungen
+  sind auf Nutzeranordnung bis zur naechsten Performancephase zurueckgestellt.
+  Der Nutzer uebernimmt die Spieltests; kein Agent startet game.exe.
 - Am 9. September hat der Nutzer nach Big vor Chaos 6 den r327-Crashbatch
   geschlossen und den naechsten Export nach dessen Fix ausdruecklich freigegeben.
   Der gesamte vorbereitete r328-Batch wird als 0.49.4 exportiert und danach
@@ -461,9 +473,9 @@ Task implementieren
   an. Dauerhaftes P0-Ziel ist eine unabhaengig getaktete Bildpraesentation bis
   144 FPS im 144-Hz-Modus (6,94 ms pro Praesentation), bei korrektem Spieltempo,
   Audio und Input. Sonic behaelt vorerst die konfigurierte 30-Hz-Game-Clock;
-  deren Bildproduktion muss stabil erreicht werden. Die Originalbyte-Pruefung
-  vom 9. September belegt ein 60-Hz-Anzeigeprofil, aber keinen globalen
-  30-Hz-Simulationsteiler. Originaltempo bleibt deshalb gesondert zu belegen;
+  deren Bildproduktion muss stabil erreicht werden. Die Timingpruefung vom
+  9. September ist wegen falscher Original-RAMdump-Offsets bis zur erneuten
+  Bytebindung nicht als Beleg zulaessig. Originaltempo bleibt gesondert zu belegen;
   weder 30 noch 60 Titelupdates werden allein aus dem Anzeigeprofil abgeleitet.
   CPU-Arbeit pro Simulationsframe und CPU-Auslastung im gleichen Gameplayfenster
   sind eigene P0-Messgroessen; hoehere FPS allein beweisen keine Effizienzsteigerung.

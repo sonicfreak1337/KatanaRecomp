@@ -1,7 +1,8 @@
 # Aktueller Projektstand
 
-Stand: 9. September 2026, r328/0.49.4 exportiert und statisch geprueft;
-den Spieltest uebernimmt der Nutzer. Historische Runs und
+Stand: 9. September 2026, r329/0.49.4 inkrementell exportiert;
+der Nutzer testet. Entwicklungsversion fuer den naechsten Export: 0.49.5.
+Die statische Delta-Nachpruefung bleibt eingeschraenkt. Historische Runs und
 Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
 Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
 
@@ -17,13 +18,92 @@ korrektes Originaltempo mit stabiler aktuell auf 30 Hz konfigurierter Simulation
 weniger CPU-Arbeit pro Titelupdate, unabhaengige 144-Hz-Praesentation, ein
 vollstaendiger Kaltexport unter zehn Minuten und kosteneffiziente Umsetzung.
 Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
-Die statische Originalbyte-Pruefung vom 9. September belegt ein 60-Hz-Anzeigeprofil
-und ein Titelupdate pro Hauptschleife, aber keinen globalen 30-Hz-Teiler.
-Die originale Titelupdate-Frequenz bleibt offen; die Konfiguration wird bis zu
-einem staerkeren Beleg nicht auf Verdacht veraendert.
+Die originale Titelupdate-Frequenz bleibt offen. Die Timingpruefung vom
+9. September verwendete teilweise falsche Datei-Offsets fuer den Original-RAMdump;
+ihre Aussagen zum Anzeigeprofil und zur Hauptschleife gelten bis zur erneuten
+korrekten Bytebindung nicht als belegt. Die konfigurierte Frequenz wird nicht
+auf Verdacht veraendert.
 
 ## Belegter Fortschritt
 
+- Der Nutzer bestaetigt Bigs abgeschlossene Story in r329. Nach Tails ist
+  dies die zweite bis zum Abspann durchgespielte Kampagne. Sein Screenshot
+  zeigt weiterhin zerlegte Credits-Schrift mit schwarzen Rechtecken.
+  Der Versionsbump auf 0.49.5 ist quellseitig gesetzt; r329 bleibt 0.49.4.
+  Der Abschlussuebergang nach Bigs Abspann ist noch nicht separat bestaetigt.
+  Der Nutzer beobachtet ausserdem, dass der Abspann bei vollen 30 Sim-FPS
+  langsamer als der in Echtzeit laufende Song fortschreitet. Das ist ein
+  eigener Timingbefund: Erreichte konfigurierte Sim-FPS beweisen nicht das
+  Originaltempo. Credits-Update-/Timerkopplung wird getrennt von der
+  beschaedigten Schrift geprueft; kein pauschaler 60-Hz-Wechsel auf Verdacht.
+- Der Nutzer schliesst den r328-Story-Crashbatch mit Big/Sonic bei Chaos 6,
+  Knuckles bei Chaos 2, Amy beim Finalboss und Gamma in Hot Shelter.
+  Die Ursachen sind getrennt: fehlende Dispatcher-/Initializer-Entries,
+  ein unzulaessiger Hostabbruch bei ungueltigen Rasterpositionen und ein
+  falsch modellierter SDK-Texturtransfer. Der r329-Quellbatch ist exportiert;
+  damit ist noch keine Crashheilung im Produkt bestaetigt. Aktuell geht
+  Storyfortschritt vor zusaetzlichen Performancearbeiten, und der Nutzer
+  uebernimmt die Spieltests. Der Vergleich umfasst alle Bossmodule und die
+  zugehoerigen belegten Uebergangsfamilien. Die Pruefung bindet elf Bossimages,
+  17 Dispatcher der untersuchten Form und 276 Auswahlzellen. Zwoelf neue
+  Candidate-Einstiege ergaenzen Chaos 6 (zwei), Chaos 2 (acht) und Hot Shelter
+  (zwei), unter bytegenauem Erhalt aller 57 vorherigen globalen Seed-Zeilen.
+  Die erweiterte Eventpruefung ergaenzt einen weiteren Chaos-6-Einstieg und
+  die komplette fuenfteilige Chaos-7-Familie zum Setzen des Eventzustands.
+  Fuer Chaos 7 waren die zuvor untersuchten 39 Auswahlzellen, 15 lokalen
+  Literalaufrufe und 35 bekannten Task-Einstiege bereits kompiliert; diese
+  engere Pruefung erfasste die neuen Eventeinstiege noch nicht. Die
+  anschliessende Pointer-State-Pruefung ergaenzt 90 weitere Startpunkte:
+  E-101R (42), ZERO (35) und Egg Viper (13). Bei Egg Viper binden bereits
+  kompilierte Eventaufrufe die fehlende Initialisierung, fuenf Zustandssetter,
+  das Aufraeumen und den Task-Verbraucher seiner fuenfteiligen Tabelle.
+  Die anschliessende Pruefung ihrer Taskregistrierungen ergaenzt 26 weitere
+  Einstiege: E-101R (13), ZERO (11) und Egg Viper (zwei). Sie bindet 24 neue
+  Update-/Anzeige-/Aufraeum-Callbacks plus zwei lokale Literalcallee-Ziele.
+  Alle 163 zuvor inventarisierten Boss-Lifecycle-Ziele sind bereits im r328-
+  Pack enthalten. Insgesamt 134 neue Candidate-Zeilen in sieben Modulen;
+  alle 57 bisherigen globalen Zeilen bleiben bytegleich erhalten, Endstand
+  191. Der CFG-Abgleich verfolgt zusaetzlich 36 direkte BSR-Ziele ohne
+  redundante Root-Eintraege.
+  Nicht eindeutig aufgeloeste indirekte Aufrufe erzeugen keine geratenen
+  Einstiege. Die benachbarten Pointerfolgen sind Candidate-Evidence, kein
+  Beweis fuer die erlaubte Indexmenge. Nicht belegte Eventproducer und andere
+  Dispatcherformen bleiben explizit offen; dies ist keine vollstaendige
+  Boss-Gameplayabnahme oder Strict-Cross-Image-Promotion.
+  Der private Adapter verwirft ungueltige Rasterdreiecke statt den Big-Lauf
+  abzubrechen und bildet die SDK-Surfacetransfers samt Mipmap-Offsets und
+  tatsaechlich benoetigten VQ-Codebookdaten ab. Gezielte extrahierte
+  Produktionshelper sowie die Adapter-Syntaxpruefung bestehen; Quellen,
+  Provideridentitaet und Export-Authorergate sind integriert. r329 ist gebaut,
+  der Nutzer bestaetigt Bigs Story bis zum Abspann als Produktwitness.
+  Keine gemeinsamen
+  Runtime-Header oder Codegeneratoren fuer diesen Crashbatch geaendert.
+- r329 baut genau 35 von 1.098 AOT-Dateien neu; 1.063 bleiben bytegleich,
+  gemeinsame generierte Header sind unveraendert. Das 32er-Compilegate hat
+  vor dem Compiler gestoppt und wurde nach Byte-/Ninja-Pruefung fuer diesen
+  Batch auf exakt 35 gesetzt. Hostbuild 1 min 42 s, erfolgreicher CLI-Export
+  2 min 17 s, mit Wrapper 3 min 7 s. Einschliesslich abgewiesenem r328-
+  Analysecheckpoint, neuer Analyse und Compileplan-Stopp dauerte der gesamte
+  Ablauf 16 min 49 s. Das Zehn-Minuten-End-to-End-Ziel bleibt verfehlt;
+  dies ist kein Kaltbuild. Der Checkpoint bindet die alte Hintmenge und kann
+  die 134 neuen Roots nicht direkt uebernehmen; der normale Pfad verwendet
+  den vorhandenen Root-/Modulcache. Der abschliessende Durchlauf trifft den
+  neuen Gesamtanalyse-Cache. Alle 249 Module und 6.239 Seed-Eintraege sind
+  vorhanden, insgesamt 963.404 Dispatch-Eintraege. Drei weggefallene alte
+  Blockstarts, zwei verkuerzte Spans und 492 Ownerwechsel wurden gesondert
+  gegen die erzeugten Bodies und Originalbytes geprueft. Die 15 Primary-
+  Ownerwechsel behalten alle exakten Cases und acht bytegleiche Blockbodies.
+  Die beiden verkuerzten Spans sind vollstaendige Splits. Drei alte
+  Middle-Block-Einstiege in E-101R, ZERO und Egg Viper sind als Instruktionen
+  weiterhin vorhanden, verlieren aber ihre exakten externen Dispatchcases.
+  Bekannte normale Inbounds fuehren ueber den Vorgaenger; ein fehlender
+  Exception-/Retry-Reentry ist damit nicht ausgeschlossen. Die automatische
+  monotone Entry-Qualification bleibt daher FAIL, bis diese Verfuegbarkeit
+  wiederhergestellt oder ein strenger Nicht-Reentry-Beweis vorhanden ist.
+  Die benoetigten internen Fortsetzungen bleiben vorhanden. Im geprueften
+  normalen Fluss ist kein konkreter Regressionspfad belegt; r329 wird mit
+  dieser dokumentierten statischen Einschraenkung weiter getestet. Der
+  erfolgreiche Big-Lauf ersetzt den separaten Nicht-Reentry-Beweis nicht.
 - r328 enthaelt den geprueften SIMD-FPU-/FMOV-Gruppenbatch, die generische
   Behandlung wiederverwendeter Texture-Deskriptoren (Gamma Hot Shelter und
   Tails nach Credits) sowie 20 neue quellgebundene Callback-Kandidaten in

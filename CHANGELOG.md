@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- Entwicklungsversion 0.49.5: Der Nutzer bestaetigt Bigs abgeschlossene
+  Sonic-Adventure-Kampagne im nativen r329/0.49.4-Port. Zusammen mit Tails
+  sind damit zwei Kampagnen bis zum Abspann durchgespielt. Die zerlegte
+  Credits-Schrift bleibt ein offener Grafikfehler; die Versionserhoehung
+  behauptet weder dessen Behebung noch vollstaendige Spielabdeckung.
+
 - Der Portexport trennt nun den unveraenderten `strict-product`-Pfad von
   einem ausdruecklich nicht releasefaehigen `native-bringup`-Profil. Ein
   versioniertes Authoring-Artefakt bindet Projekt, committed Analyse,
