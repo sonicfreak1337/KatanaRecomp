@@ -34,11 +34,12 @@ namespace katana::runtime {
 
 #if KATANA_RUNTIME_HAS_X86_AVX2_FMA_DISPATCH
 namespace detail {
-void fpu_transform_vector_avx2_fma(const float* matrix,
-                                   const float* vector,
-                                   float* result) noexcept;
-float fpu_inner_product_avx2_fma(const float* source,
-                                const float* destination) noexcept;
+bool fpu_transform_vector_bits_avx2_fma(const std::uint32_t* matrix,
+                                        std::uint32_t* vector,
+                                        bool dn) noexcept;
+bool fpu_inner_product_bits_avx2_fma(const std::uint32_t* source,
+                                     std::uint32_t* destination,
+                                     bool dn) noexcept;
 float fpu_multiply_accumulate_avx2_fma(float first,
                                       float second,
                                       float addend) noexcept;
@@ -1059,24 +1060,14 @@ void fpu_inner_product(CpuState& cpu,
                        const std::uint8_t source_vector,
                        const std::uint8_t destination_vector) noexcept {
 #if KATANA_RUNTIME_HAS_X86_AVX2_FMA_DISPATCH
-    if (host_avx2_fma_available()) {
+    if (source_vector <= 12u && destination_vector <= 12u &&
+        (source_vector & 3u) == 0u && (destination_vector & 3u) == 0u &&
+        host_avx2_fma_available()) {
         const ScopedHostRounding rounding(cpu);
-        float source[4];
-        float destination[4];
-        bool finite = true;
-        for (std::uint8_t i = 0u; i < 4u; ++i) {
-            source[i] = read_single_operand(
-                cpu, static_cast<std::uint8_t>(source_vector + i));
-            destination[i] = read_single_operand(
-                cpu, static_cast<std::uint8_t>(destination_vector + i));
-            finite = finite && std::isfinite(source[i]) &&
-                     std::isfinite(destination[i]);
-        }
-        if (finite) {
+        if (detail::fpu_inner_product_bits_avx2_fma(
+                cpu.fr.data() + source_vector, cpu.fr.data() + destination_vector,
+                (cpu.fpscr & fpscr_dn_mask) != 0u)) {
             clear_fpu_causes(cpu);
-            write_single_result(
-                cpu, static_cast<std::uint8_t>(destination_vector + 3u),
-                detail::fpu_inner_product_avx2_fma(source, destination));
             return;
         }
     }
@@ -1095,33 +1086,14 @@ bool try_fpu_transform_vector_simd(
     CpuState& cpu,
     const std::uint8_t destination_vector) noexcept {
 #if KATANA_RUNTIME_HAS_X86_AVX2_FMA_DISPATCH
-    if (!host_avx2_fma_available()) return false;
+    if (destination_vector > 12u || (destination_vector & 3u) != 0u ||
+        !host_avx2_fma_available()) return false;
 
     const ScopedHostRounding rounding(cpu);
-    float vector[4]{};
-    float matrix[16]{};
-    float result[4]{};
-    for (std::uint8_t index = 0u; index < 4u; ++index) {
-        vector[index] = read_single_operand(
-            cpu, static_cast<std::uint8_t>(destination_vector + index));
-    }
-    for (std::uint8_t index = 0u; index < 16u; ++index) {
-        matrix[index] =
-            flush_denormalized(cpu, std::bit_cast<float>(cpu.xf[index]));
-    }
-    if (!std::all_of(std::begin(vector), std::end(vector), [](const float value) {
-            return std::isfinite(value);
-        }) ||
-        !std::all_of(std::begin(matrix), std::end(matrix), [](const float value) {
-            return std::isfinite(value);
-        }))
-        return false;
+    if (!detail::fpu_transform_vector_bits_avx2_fma(
+            cpu.xf.data(), cpu.fr.data() + destination_vector,
+            (cpu.fpscr & fpscr_dn_mask) != 0u)) return false;
     clear_fpu_causes(cpu);
-    detail::fpu_transform_vector_avx2_fma(matrix, vector, result);
-    for (std::uint8_t row = 0u; row < 4u; ++row) {
-        write_single_result(
-            cpu, static_cast<std::uint8_t>(destination_vector + row), result[row]);
-    }
     return true;
 #else
     static_cast<void>(cpu);

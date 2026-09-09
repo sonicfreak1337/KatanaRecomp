@@ -1,6 +1,14 @@
 # KatanaRecomp
 
-**Aktuelle Version: 0.49.3**
+**Aktuelle Version: 0.49.4**
+
+Entwicklungsstand r328 ist exportiert; den Spieltest uebernimmt der Nutzer.
+Der Nutzer hat am 9. September
+2026 die Tails-Kampagne in Sonic Adventure mit r327 vollstaendig beendet.
+Die Credits-Schrift ist noch fehlerhaft; der Uebergang nach dem Abspann
+endete in r327 mit einem Crash; r328 enthaelt einen noch im Spiel zu bestaetigenden
+Texture-Lebensdauer-Fix dafuer. Dieser Meilenstein ist keine
+Abnahme der anderen Kampagnen oder der gesamten Grafikpipeline.
 
 KatanaRecomp ist ein C++20-Framework fuer die statische Rekompilierung von
 Dreamcast-SH-4-Programmen in native PC-Ports. Das Projekt ist Pre-Alpha:

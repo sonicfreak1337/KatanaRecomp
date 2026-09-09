@@ -1,6 +1,6 @@
 # KatanaRecomp Task-Katalog
 
-Dieses Dokument enthaelt die aktiven `v0.49.3`-Produktaufgaben. Historische
+Dieses Dokument enthaelt die aktiven `v0.49.4`-Produktaufgaben. Historische
 Aufgaben und fruehere Detailstaende bleiben in Git und in
 `TASK_ID_REGISTRY.md` nachvollziehbar.
 
@@ -12,8 +12,16 @@ Aufgaben und fruehere Detailstaende bleiben in Git und in
 
 ## Aktueller Entwicklungs- und Release-Status
 
-`v0.49.3` ist der aktuelle Entwicklungsstand und kein regulaerer Release.
-Fuer `v0.49.3` wird bewusst kein Git-Tag gesetzt. Der naechste echte Release
+`v0.49.4` ist der exportierte und statisch gepruefte Entwicklungsstand r328.
+Die Tails-Kampagne wurde am 9. September 2026 vom Nutzer in r327 beendet;
+die unlesbare Credits-Schrift bleibt offen. Fuer den Absturz nach dem Abspann
+ist ein Texture-Lebensdauer-Fix enthalten, dessen Spielbestaetigung aussteht.
+Den r328-Spieltest uebernimmt auf eigenen Wunsch der Nutzer.
+P0 bleibt die Compile-Reichweite: Der r328-Export brauchte 43 min 33 s,
+davon 33 min 41 s Hostbuild. Gemeinsame Header-/Codegen-Optimierungen werden
+kuenftig von schnellen Crashbatches getrennt; Compilerarbeit und Codeumfang
+muessen sinken, ohne Coverage oder Performance des Spiels zu reduzieren.
+Fuer `v0.49.4` wird bewusst kein Git-Tag gesetzt. Der naechste echte Release
 bleibt `v0.5.0`; er darf erst freigegeben und getaggt werden, wenn die
 vollstaendige Spielbarkeit von Sonic Adventure PAL ueber den rein nativen
 Produktpfad nachgewiesen ist.
@@ -89,7 +97,7 @@ Daher gilt projektweit:
   nicht als Performancefix erhoeht. Der aktuelle P0 muss durch weniger
   notwendige Arbeit geschlossen werden.
 
-## Verbindlicher v0.49.3-Native-Portpfad
+## Verbindlicher v0.49.4-Native-Portpfad
 
 Der Produktport ist kein Emulator. Statisches SH-4-AOT wird an validierten
 Spiel-/SDK-Grenzen mit nativer PC-Grafik, -Audio/-Movie, -Datei-, -Eingabe-

@@ -2,7 +2,7 @@
 
 Status: Pre-Alpha
 
-Aktuelle Phase: `v0.49.3` - Sonic-Adventure-Native-Port,
+Aktuelle Phase: `v0.49.4` - Sonic-Adventure-Native-Port,
 statisches SH-4-AOT und native PC-Plattformdienste
 
 Naechster regulaerer Release: `v0.5.0`
@@ -16,8 +16,13 @@ Naechster regulaerer Release: `v0.5.0`
 
 ## Entwicklungs- und Release-Status
 
-`v0.49.3` ist der aktuelle Entwicklungsstand und kein regulaerer Release.
-Fuer `v0.49.3` wird bewusst kein Git-Tag gesetzt. Der naechste echte Release
+`v0.49.4` ist der exportierte Entwicklungsstand r328, statisch geprueft.
+Anlass ist die am 9. September 2026 vom Nutzer vollstaendig durchgespielte
+Tails-Kampagne bis zum Abspann in r327; die Credits-Schrift und der
+anschliessende Absturz beim Abschlussuebergang sind separat zu bewerten.
+Der Abschlussuebergang hat in r328 einen Quellfix, dessen Spieltest der Nutzer
+uebernimmt; die Credits-Schrift bleibt offen.
+Fuer `v0.49.4` wird bewusst kein Git-Tag gesetzt. Der naechste echte Release
 bleibt `v0.5.0`; er darf erst freigegeben und getaggt werden, wenn die
 vollstaendige Spielbarkeit von Sonic Adventure PAL ueber den rein nativen
 Produktpfad nachgewiesen ist.
@@ -242,7 +247,7 @@ Der vollstaendige native Produktvertrag in
 hat Vorrang vor allen aelteren RuntimeOnly-, AICA-, PVR- und
 Performancebeschreibungen.
 
-## Aktueller v0.49.3-Native-Portpfad
+## Aktueller v0.49.4-Native-Portpfad
 
 Die neue verbindliche Reihenfolge lautet:
 
@@ -702,7 +707,7 @@ PlatformAbi-Optimierungsbefunde bleiben deferred. KR-4981 ist historische
 RuntimeOnly-Evidenz und durch KR-5005 abgeloest. KR-4982 und KR-4983 bleiben
 als alte optionale Offload-Aufgaben gestrichen.
 
-## v0.49.3-Kritischer Pfad
+## v0.49.4-Kritischer Pfad
 
 1. **[x] Native Produktlinkgrenze**
    - eigenes `native-port`-Produktprofil;
@@ -791,9 +796,9 @@ als alte optionale Offload-Aufgaben gestrichen.
 - neue Test-, Konformitaets- oder Threadmatrizen;
 - weitere Controller-Haertung.
 
-## v0.49.3 Definition of Done
+## v0.49.4 Definition of Done
 
-`v0.49.3` erhaelt kein Git-Tag und gibt den naechsten regulaeren Release
+`v0.49.4` erhaelt kein Git-Tag und gibt den naechsten regulaeren Release
 `v0.5.0` erst frei, wenn:
 
 - Recompiler, Runtime und externes Spielprojekt getrennt gebaut werden

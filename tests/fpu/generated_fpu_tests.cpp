@@ -136,7 +136,7 @@ void run_fpu_cache_plan_fixture(katana_generated::CpuState& cpu, Function functi
     // the fixture a second time.
     for (unsigned boundary = 0u; boundary < 16u; ++boundary) {
         function(cpu);
-        if (cpu.trap_pending || cpu.pc < 0x300u || cpu.pc >= 0x3E0u) return;
+        if (cpu.trap_pending || cpu.pc < 0x300u || cpu.pc >= 0x400u) return;
     }
     require(false, "Der erweiterte FPU-Cacheplan hat seinen Resume-Pfad nicht beendet.");
 }
@@ -264,6 +264,106 @@ class GeneratedFpuServices final : public katana::runtime::PlatformServices {
 } // namespace
 
 int main() {
+    {
+        katana::runtime::Memory memory(0u);
+        auto backing = std::make_shared<katana::runtime::LinearMemoryDevice>(0x100u);
+        memory.map_region("first", 0u, backing);
+        memory.map_region("mirror", 0x100u, backing);
+        memory.bind_direct_linear_alias_window(0u, 0x200u, *backing);
+        const auto guard = memory.direct_linear_memory_guard(false);
+        for (const auto address : {0x800000F8u, 0x80000022u, 0x9FFFFFF8u}) {
+            std::array<std::uint32_t, 4u> values{1u, 2u, 3u, 4u};
+            require(!katana::runtime::direct_linear_guard_read_u32_group(
+                        guard, address, values) &&
+                        values == std::array<std::uint32_t, 4u>{1u, 2u, 3u, 4u} &&
+                        memory.performance_counters().indexed_region_hits == 0u &&
+                        memory.performance_counters().unobserved_accesses == 0u,
+                    "FMOV-Gruppenguard akzeptiert Backing-Wrap, Fehlausrichtung oder Aliasgrenze.");
+        }
+    }
+    // Same native Sonic FMOV-postincrement family under direct RAM, mode,
+    // fault and observer boundaries. The conservative emission has no group.
+    for (unsigned mode = 0u; mode < 8u; ++mode) {
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        const auto fpscr = mode == 2u ? katana::runtime::fpscr_sz_mask : 0u;
+        const auto alias = mode == 5u ? 0x80000000u : mode == 6u ? 0xA0000000u : 0u;
+        for (auto* state : {optimized.get(), conservative.get()}) {
+            prepare_fpu_cache_plan_fixture(*state, fpscr);
+            if (alias != 0u) state->write_sr(katana::runtime::sr_md_mask);
+            state->r[5] = mode == 1u ? 0xF4u : alias + 0x20u;
+            for (unsigned index = 0u; index < 4u; ++index)
+                state->memory.write_u32(0x24u + index * 4u, 0x80000001u + index);
+            state->memory.write_u32(0xF8u, 0x11223344u);
+            state->memory.write_u32(0xFCu, 0x55667788u);
+            if (mode == 3u) state->write_sr(katana::runtime::sr_fd_mask);
+            state->pc = 0x3E0u;
+            if (mode == 7u) {
+                state->r[8] = 0x2Cu;
+                state->pc = 0x3E8u;
+            }
+            state->memory.reset_performance_counters();
+        }
+        std::array<std::vector<std::uint32_t>, 2> observed;
+        if (mode == 4u) {
+            unsigned owner = 0u;
+            for (auto* state : {optimized.get(), conservative.get()}) {
+                const auto guard = state->memory.direct_linear_memory_guard(false);
+                const auto index = owner++;
+                state->memory.set_trace_handler([state, index, &observed](const auto& event) {
+                    if (event.operation != katana::runtime::MemoryAccessOperation::Read) return;
+                    const auto ordinal = observed[index].size();
+                    require(event.address == 0x24u + ordinal * 4u &&
+                                state->r[8] == event.address &&
+                                state->active_instruction_pc == 0x3E4u + ordinal * 2u,
+                            "FMOV-Observer sieht falschen Einzelinstruktionszustand.");
+                    observed[index].push_back(event.address);
+                });
+                std::array<std::uint32_t, 4u> rejected{1u, 2u, 3u, 4u};
+                require(!katana::runtime::direct_linear_guard_read_u32_group(
+                            guard, 0x80000024u, rejected) &&
+                            rejected == std::array<std::uint32_t, 4u>{1u, 2u, 3u, 4u} &&
+                            state->memory.performance_counters().indexed_region_hits == 0u &&
+                            state->memory.performance_counters().unobserved_accesses == 0u,
+                        "Veralteter FMOV-Gruppenguard liest Daten oder veraendert Zaehler.");
+            }
+        }
+        run_fpu_cache_plan_fixture(*optimized, katana_fpu_cache_plan_optimized::fn_000003E0);
+        run_fpu_cache_plan_fixture(*conservative, katana_fpu_cache_plan_conservative::fn_000003E0);
+        require(same_fmov_cache_architecture(*optimized, *conservative),
+                "FMOV-Gruppenpfad unterscheidet sich vom skalaren Native-Pfad, Fall " +
+                    std::to_string(mode));
+        if (mode == 0u || alias != 0u) {
+            require(optimized->r[8] == alias + 0x34u && optimized->fr[0] == 0x80000001u &&
+                        optimized->fr[2] == 0x80000002u && optimized->fr[4] == 0x80000003u &&
+                        optimized->fr[6] == 0x80000004u &&
+                        optimized->memory.performance_counters().indexed_region_hits == 4u &&
+                        optimized->memory.performance_counters().unobserved_accesses == 4u,
+                    "FMOV-Lesegruppe verliert Rohbits, Postincrement oder vier Lesezugriffe.");
+        } else if (mode == 1u) {
+            require(optimized->trap_pending && optimized->spc == 0x3E8u &&
+                        optimized->r[8] == 0x100u && optimized->fr[0] == 0x11223344u &&
+                        optimized->fr[2] == 0x55667788u,
+                    "Abgelehnte FMOV-Gruppe verliert den gueltigen Fortschritt vor dem Fault.");
+        } else if (mode == 2u) {
+            require(optimized->r[8] == 0x44u,
+                    "FMOV-SZ=1 verwendet versehentlich Single-Gruppenbreite.");
+        } else if (mode == 3u) {
+            require(optimized->trap_pending && optimized->spc == 0x3E4u &&
+                        optimized->r[8] == 0x24u,
+                    "FMOV-Gruppenpruefung verliert die erste FD-Ausnahme.");
+        } else if (mode == 4u) {
+            require(observed[0].size() == 4u && observed[0] == observed[1],
+                    "FMOV-Lesegruppe umgeht einen aktiven Speicherobserver.");
+        } else {
+            require(optimized->r[8] == 0x34u && optimized->fr[0] == 0x40000000u &&
+                        optimized->fr[2] == 0x40000000u &&
+                        optimized->fr[4] == 0x80000003u && optimized->fr[6] == 0x80000004u &&
+                        optimized->memory.performance_counters().indexed_region_hits == 2u &&
+                        optimized->memory.performance_counters().unobserved_accesses == 2u,
+                    "FMOV-Innenentry fuehrt fruehere Gruppeninstruktionen erneut aus.");
+        }
+    }
     using katana::runtime::read_dr_double;
 
     // The observer-emitted reference retains every architectural attempt. This

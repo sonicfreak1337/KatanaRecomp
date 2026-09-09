@@ -5720,6 +5720,109 @@ void emit_block(std::ostringstream& output,
         }
 
         const auto timing = katana::sh4::instruction_timing(instruction.original_opcode);
+        const auto can_group_fmov_load = [&](const katana::ir::Instruction& candidate) {
+            return guarded_local_block_chaining && registers.enabled() &&
+                !external_instruction_observer &&
+                candidate.operation == katana::ir::Operation::FmovLoadPostIncrement &&
+                candidate.delay_slot.role == katana::ir::DelaySlotRole::None &&
+                !candidate.is_privileged &&
+                !requires_post_instruction_architectural_safepoint(candidate) &&
+                has_guarded_linear_ram_read(candidate);
+        };
+        if (can_group_fmov_load(instruction)) {
+            auto group_end = index + 1u;
+            auto group_cycles = static_cast<std::uint64_t>(timing.guest_cycles);
+            while (group_end < block.instructions.size() && group_end - index < 16u) {
+                const auto& candidate = block.instructions[group_end];
+                if (!can_group_fmov_load(candidate) ||
+                    candidate.source_register != instruction.source_register ||
+                    candidate.source_address !=
+                        static_cast<std::uint64_t>(instruction.source_address) +
+                            2u * (group_end - index))
+                    break;
+                group_cycles += katana::sh4::instruction_timing(
+                    candidate.original_opcode).guest_cycles;
+                ++group_end;
+            }
+            if (group_end - index >= 2u) {
+                const auto count = group_end - index;
+                const auto source = general_register_expression(
+                    instruction.source_register, registers);
+                const auto group_end_label =
+                    cpp_block_label(instruction.source_address) + "_fmov_group_end";
+                emit_pending_accounting_region();
+                emit_indent(output, 4);
+                output << "{\n";
+                emit_indent(output, 5);
+                output << "// Fully validated, callback-free FMOV.S read group\n";
+                emit_indent(output, 5);
+                output << "std::array<std::uint32_t, " << count
+                       << "u> katana_fmov_group_values{};\n";
+                emit_indent(output, 5);
+                output << "const auto katana_fmov_group_virtual_address = "
+                       << source << ";\n";
+                emit_indent(output, 5);
+                output << "std::uint32_t katana_fmov_group_direct_address = 0u;\n";
+                emit_indent(output, 5);
+                output << "if ((cpu.sr & katana::runtime::sr_fd_mask) == 0u &&\n";
+                emit_indent(output, 6);
+                output << "(cpu.fpscr & (katana::runtime::fpscr_pr_mask | "
+                          "katana::runtime::fpscr_sz_mask)) == 0u &&\n";
+                emit_indent(output, 6);
+                output << "katana_direct_ram_translate(katana_fmov_group_virtual_address, "
+                          "katana_fmov_group_direct_address) &&\n";
+                emit_indent(output, 6);
+                output << "katana::runtime::direct_linear_guard_read_u32_group(\n";
+                emit_indent(output, 7);
+                output << "katana_direct_ram, katana_fmov_group_direct_address, "
+                          "katana_fmov_group_values)) {\n";
+                // The helper rejects the whole range before any read. On success
+                // no memory observer, provider, fault or resume edge can observe
+                // the interior, just as for the existing non-faulting FPU epoch.
+                for (auto group_index = index; group_index < group_end; ++group_index) {
+                    emit_indent(output, 6);
+                    output << "cpu.fr["
+                           << static_cast<unsigned>(
+                                  block.instructions[group_index].destination_register)
+                           << "] = katana_fmov_group_values[" << group_index - index
+                           << "u];\n";
+                }
+                emit_indent(output, 6);
+                output << source << " = katana_fmov_group_virtual_address + "
+                       << count * 4u << "u;\n";
+                emit_fpu_epoch_final_instruction_metadata(
+                    output, block.instructions[group_end - 1u], 6);
+                emit_instruction_accounting_region(output, 6, count, group_cycles);
+                emit_indent(output, 6);
+                output << "goto " << group_end_label << ";\n";
+                emit_indent(output, 5);
+                output << "}\n";
+                emit_indent(output, 4);
+                output << "}\n";
+                // Every original fallthrough remains an exact cold-path entry.
+                // Keeping these labels outside the fast-path scratch scope lets
+                // an interior resume bypass all earlier reads and increments.
+                for (auto group_index = index; group_index < group_end; ++group_index) {
+                    const auto& grouped_instruction = block.instructions[group_index];
+                    if (group_index != index &&
+                        std::binary_search(resume_entries.begin(), resume_entries.end(),
+                                           grouped_instruction.source_address)) {
+                        emit_indent(output, 4);
+                        output << cpp_block_label(grouped_instruction.source_address)
+                               << "_resume:\n";
+                    }
+                    emit_guarded_simple_instruction(
+                        output, grouped_instruction, 4, single_block,
+                        external_instruction_observer, false, registers,
+                        has_direct_ram_writes, table_compatible_function_entries,
+                        guarded_local_block_chaining);
+                }
+                emit_indent(output, 4);
+                output << group_end_label << ":;\n";
+                index = group_end - 1u;
+                continue;
+            }
+        }
         if (can_share_host_fpu_execution_epoch(
                 instruction, timing, external_instruction_observer)) {
             auto epoch_mode_mask =

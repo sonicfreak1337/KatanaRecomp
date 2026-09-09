@@ -338,9 +338,9 @@ struct DirectLinearMemoryGuard {
     const std::uint64_t* generation_source_ = nullptr;
     MemoryPerformanceCounters* performance_counters_ = nullptr;
 
-    void account_successful_read() const noexcept {
-        ++performance_counters_->indexed_region_hits;
-        ++performance_counters_->unobserved_accesses;
+    void account_successful_read(const std::uint64_t count = 1u) const noexcept {
+        performance_counters_->indexed_region_hits += count;
+        performance_counters_->unobserved_accesses += count;
     }
 
     friend class Memory;
@@ -356,6 +356,11 @@ struct DirectLinearMemoryGuard {
         const DirectLinearMemoryGuard& guard,
         std::uint32_t virtual_address,
         std::uint32_t& value) noexcept;
+    template <std::size_t WordCount>
+    friend bool direct_linear_guard_read_u32_group(
+        const DirectLinearMemoryGuard& guard,
+        std::uint32_t virtual_address,
+        std::array<std::uint32_t, WordCount>& values) noexcept;
 };
 
 [[nodiscard]] inline bool direct_linear_guard_offset(
@@ -421,6 +426,44 @@ struct DirectLinearMemoryGuard {
                 static_cast<std::uint32_t>(guard.read_bytes[offset + 3u]) << 24u;
     }
     guard.account_successful_read();
+    return true;
+}
+
+// Read-only, callback-free batch. A miss leaves both values and counters
+// untouched, so generated code can retain its exact per-instruction fallback.
+// Unlike the scalar-width helper, a group's start only needs word alignment.
+template <std::size_t WordCount>
+[[nodiscard]] inline bool direct_linear_guard_read_u32_group(
+    const DirectLinearMemoryGuard& guard,
+    const std::uint32_t virtual_address,
+    std::array<std::uint32_t, WordCount>& values) noexcept {
+    static_assert(WordCount > 0u && WordCount <= 16u);
+    constexpr auto width = WordCount * sizeof(std::uint32_t);
+    if (!guard || (virtual_address & 0xC0000000u) != 0x80000000u ||
+        (virtual_address & 3u) != 0u)
+        return false;
+    const auto physical_address = virtual_address & 0x1FFFFFFFu;
+    if (physical_address > 0x20000000u - width ||
+        physical_address < guard.physical_base)
+        return false;
+    const auto relative = physical_address - guard.physical_base;
+    if (relative >= guard.physical_span || width > guard.physical_span - relative)
+        return false;
+    const auto offset = relative & guard.backing_mask;
+    if (width > static_cast<std::size_t>(guard.backing_mask) + 1u - offset)
+        return false;
+    if constexpr (std::endian::native == std::endian::little) {
+        std::memcpy(values.data(), guard.read_bytes + offset, width);
+    } else {
+        for (std::size_t index = 0u; index < WordCount; ++index) {
+            const auto source = guard.read_bytes + offset + index * 4u;
+            values[index] = static_cast<std::uint32_t>(source[0]) |
+                static_cast<std::uint32_t>(source[1]) << 8u |
+                static_cast<std::uint32_t>(source[2]) << 16u |
+                static_cast<std::uint32_t>(source[3]) << 24u;
+        }
+    }
+    guard.account_successful_read(WordCount);
     return true;
 }
 

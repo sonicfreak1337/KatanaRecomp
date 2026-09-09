@@ -1,6 +1,7 @@
 # Aktueller Projektstand
 
-Stand: 9. September 2026, r322-Matrix und gezielte r325--r327-Laeufe abgeschlossen. Historische Runs und
+Stand: 9. September 2026, r328/0.49.4 exportiert und statisch geprueft;
+den Spieltest uebernimmt der Nutzer. Historische Runs und
 Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
 Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
 
@@ -12,12 +13,54 @@ Kontrollfluss. NativeBringup bleibt nicht releasefaehig; ein funktionierender
 Teil des Spiels bedeutet keine vollstaendige Closure oder Releaseabnahme.
 
 Gleichrangige P0-Ziele sind erhaltener Story-/Gameplay-/Savefortschritt,
-stabile originale 30-Hz-Simulation, unabhaengige 144-Hz-Praesentation, ein
+korrektes Originaltempo mit stabiler aktuell auf 30 Hz konfigurierter Simulation,
+weniger CPU-Arbeit pro Titelupdate, unabhaengige 144-Hz-Praesentation, ein
 vollstaendiger Kaltexport unter zehn Minuten und kosteneffiziente Umsetzung.
 Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
+Die statische Originalbyte-Pruefung vom 9. September belegt ein 60-Hz-Anzeigeprofil
+und ein Titelupdate pro Hauptschleife, aber keinen globalen 30-Hz-Teiler.
+Die originale Titelupdate-Frequenz bleibt offen; die Konfiguration wird bis zu
+einem staerkeren Beleg nicht auf Verdacht veraendert.
 
 ## Belegter Fortschritt
 
+- r328 enthaelt den geprueften SIMD-FPU-/FMOV-Gruppenbatch, die generische
+  Behandlung wiederverwendeter Texture-Deskriptoren (Gamma Hot Shelter und
+  Tails nach Credits) sowie 20 neue quellgebundene Callback-Kandidaten in
+  Chaos-6-/Chaos-2-/Chaos-0- und zugehoerigen Eventfamilien. Big vor Chaos 6
+  trifft dieselbe ergaenzte Chaos-6-Familie wie Sonic. Keine Proof-Promotion.
+  Alle 249 geladenen Module, alle bisherigen Blockanfaenge und alle 250.993
+  Primary-Dispatch-Tupel bleiben erhalten. 704 zusaetzliche geladene AOT-Bloecke;
+  insgesamt 954.177 Dispatch-Eintraege. 6.105 quellgebundene Seed-Zeilen und
+  106 Primary-Kandidaten bestehen die statische Produktpruefung.
+  20 Dispatch-Owner verschieben sich innerhalb der neu vervollstaendigten
+  Chaos-6-/Chaos-2-Funktionskoerper; kein alter Blockspan aendert sich.
+  Vier gezielte FPU-/Codegen-Komponentenpruefungen bestehen. Auf Nutzerwunsch
+  kein eigener r328-Spieltest; Crashheilung und Leistungsgewinn bleiben bis
+  zum Produktlauf unbestaetigt.
+- r328-Export: 43 min 33 s CLI-Lauf, davon 33 min 41 s Hostbuild;
+  44 min 24 s einschliesslich Wrapper-Vorlauf. Das Zehn-Minuten-Ziel ist
+  klar verfehlt. Zwei vorherige Vorbereitungsversuche endeten vor dem
+  Produktcompile (Provideridentitaet, danach inkompatibler alter Checkpoint).
+  872/1.087 AOT-Quellen enthalten die neue FMOV-Gruppe; 215 weitere sind
+  bytegleich, wurden aber durch den gemeinsamen Header ebenfalls invalidiert.
+  Generierter AOT-C++-Umfang 4,031 GB statt 4,019 GB. Ein neuer quellgebundener
+  Analyse-Checkpoint ist fuer kompatible Folgeaenderungen gesichert.
+- Im r328-Batch ist Amys Stop vor dem Finalboss auf fehlende indizierte
+  Originaldateien zurueckgefuehrt. Beide NB/PB-Modellpaare, die alternative
+  Event-Audiodatei und der alte indizierte Soundtreiber wurden aus dem vorhandenen
+  Disc-Abbild ergaenzt und per SHA-256 verifiziert. Alle 2.067 indizierten Dateien
+  sind jetzt mit passender Groesse vorhanden. Ein neuer generischer Installations-
+  Preflight verhindert weitere Luecken durch Dateiendungsfilter. Dies ist ein
+  Daten-/Quellfix; der Bossuebergang wurde damit noch nicht erneut gespielt.
+- Am 9. September 2026 bestaetigt der Nutzer die vollstaendig beendete
+  Tails-Kampagne in r327. Der Credits-Screenshot belegt den erreichten
+  Abspann, zeigt aber zerhackte Schrift und schwarze Rechtecke. Der
+  Kampagnenfortschritt bis zum Abspann ist ein Nutzerwitness; der Nutzer
+  meldet anschliessend einen Crash nach den Credits. Credits-Darstellung,
+  Abschlussuebergang und andere Kampagnen bleiben separat offen.
+  Die Entwicklungsversion wurde auf Nutzeranordnung auf 0.49.4 angehoben
+  und nach Abschluss des Crashbatches exportiert.
 - Intro, Hauptmenue, Character Select und regulaerer Story-Einstieg sind
   erreichbar. Der Nutzer hat im bisherigen Storypfad Chaos 4 besiegt; danach
   wurde der naechste Film angefordert. Der fruehere Stand vor dem ersten

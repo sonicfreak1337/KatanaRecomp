@@ -5,14 +5,26 @@ Phase und jeden Teilbereich dieses Repositories. Sie sind keine Empfehlung.
 Widersprechende aeltere Prozessbeschreibungen in Roadmap-, Task-, Status-,
 Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
-## Aktuelle Nutzeranordnung zum Sonic-Export (8. September 2026)
+## Aktuelle Nutzeranordnung zum Sonic-Export (9. September 2026)
 
+- Am 9. September hat der Nutzer nach Big vor Chaos 6 den r327-Crashbatch
+  geschlossen und den naechsten Export nach dessen Fix ausdruecklich freigegeben.
+  Der gesamte vorbereitete r328-Batch wird als 0.49.4 exportiert und danach
+  lokal committed, ohne Push. Neben einem Nutzerlauf startet kein Agenten-Spieltest.
+- Der Nutzer uebernimmt den r328-Spieltest selbst; kein eigener Starttest.
+- Schnelle Crashbatches bleiben inkrementell. Zusaetzliche Performanceaenderungen
+  an gemeinsamen Runtime-Headern oder am Codegenerator, die breite AOT-Neucompiles
+  ausloesen, werden nicht in einen wartenden Crash-Reparaturbuild aufgenommen.
+  Sie gehoeren in einen getrennten Performancebatch. Notwendige semantische
+  Invalidierung wird niemals umgangen. Vor dessen Export wird die erwartete
+  Compile-Reichweite geprueft; r328 mit 872 geaenderten und 215 durch den Header
+  ebenfalls invalidierten AOT-Einheiten ist kein akzeptabler schneller Loop.
 - Der r321-Crashbatch ist vom Nutzer geschlossen und zum Export freigegeben.
   Anschliessend sind autonome Performancebuilds und eigene Leveltests fuer
   die angeordnete Optimierungsphase freigegeben: einmalige Levelmatrix mit
   Steuerung und hoechstens 60 Sekunden Gameplay je Stage, danach gezielte
   Wiederholungen der betroffenen Pfade. Ziel ist CPU-Leistungspuffer fuer
-  stabile originale 30-Hz-Simulation bei 144-Hz-Praesentation. Der spaetere
+  stabile aktuell konfigurierte 30-Hz-Simulation bei 144-Hz-Praesentation. Der spaetere
   langsame Abschnitt in Amys Hot Shelter bleibt ohne passende Messung offen.
   Test-Saves bleiben isoliert; waehrend FPS-Messungen laeuft kein Build.
 - Waehrend der Nutzer einen Crashbatch sammelt, startet ein Sonic-Produktexport
@@ -448,8 +460,14 @@ Task implementieren
 - Jeder dieser Level-Runs fordert mit dem vorhandenen Produktschalter 144 Hz
   an. Dauerhaftes P0-Ziel ist eine unabhaengig getaktete Bildpraesentation bis
   144 FPS im 144-Hz-Modus (6,94 ms pro Praesentation), bei korrektem Spieltempo,
-  Audio und Input. Sonic behaelt seine originale 30-Hz-Game-Clock; deren
-  Bildproduktion muss stabil erreicht werden. Wiederholungen des letzten
+  Audio und Input. Sonic behaelt vorerst die konfigurierte 30-Hz-Game-Clock;
+  deren Bildproduktion muss stabil erreicht werden. Die Originalbyte-Pruefung
+  vom 9. September belegt ein 60-Hz-Anzeigeprofil, aber keinen globalen
+  30-Hz-Simulationsteiler. Originaltempo bleibt deshalb gesondert zu belegen;
+  weder 30 noch 60 Titelupdates werden allein aus dem Anzeigeprofil abgeleitet.
+  CPU-Arbeit pro Simulationsframe und CPU-Auslastung im gleichen Gameplayfenster
+  sind eigene P0-Messgroessen; hoehere FPS allein beweisen keine Effizienzsteigerung.
+  Wiederholungen des letzten
   vollstaendigen Bildes sind fuer das Praesentationsziel ausdruecklich erlaubt.
   144 unterschiedliche Bewegungsbilder beziehungsweise Renderinterpolation
   sind ein separater Ausbau und keine Voraussetzung dieses Ziels. Weder der

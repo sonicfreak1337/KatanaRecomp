@@ -22,7 +22,7 @@ constexpr std::uint32_t fmov_cache_fixture_address = 0x200u;
 constexpr std::uint32_t fmov_delay_fixture_address = 0x222u;
 constexpr std::uint32_t fpu_cache_plan_fixture_address = 0x300u;
 constexpr std::uint32_t fpu_cache_plan_slot_size = 0x20u;
-constexpr std::size_t fpu_cache_plan_slot_count = 7u;
+constexpr std::size_t fpu_cache_plan_slot_count = 8u;
 constexpr std::array<std::uint8_t, 54> fixture = {
     0x9Du, 0xF0u, 0x9Du, 0xF1u, 0x00u, 0xF1u, 0x02u, 0xF1u, 0x0Du, 0xF2u, 0x1Du,
     0xF3u, 0x0Bu, 0x00u, 0x09u, 0x00u, 0xFDu, 0xFBu, 0xFDu, 0xF3u, 0x0Bu, 0x00u,
@@ -225,6 +225,17 @@ std::vector<katana::ir::Function> build_fpu_cache_plan_program() {
         0x09u, 0x00u, // nop
     };
 
+    constexpr std::array<std::uint8_t, 16> grouped_fmov = {
+        0x53u, 0x68u, // mov r5,r8
+        0x04u, 0x78u, // add #4,r8
+        0x89u, 0xF0u, // fmov.s @r8+,fr0
+        0x89u, 0xF2u, // fmov.s @r8+,fr2
+        0x89u, 0xF4u, // fmov.s @r8+,fr4
+        0x89u, 0xF6u, // fmov.s @r8+,fr6
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u, // nop
+    };
+
     place(0u, fpul_convert);
     place(1u, fpul_float);
     place(2u, fpul_sca);
@@ -232,6 +243,7 @@ std::vector<katana::ir::Function> build_fpu_cache_plan_program() {
     place(4u, vector_and_fpul);
     place(5u, delay_fmov);
     place(6u, unknown_ram_cycle);
+    place(7u, grouped_fmov);
 
     const auto lines = katana::sh4::disassemble(bytes, fpu_cache_plan_fixture_address);
     constexpr std::array<std::uint32_t, fpu_cache_plan_slot_count> seeds = {
@@ -242,6 +254,7 @@ std::vector<katana::ir::Function> build_fpu_cache_plan_program() {
         fpu_cache_plan_fixture_address + 0x80u,
         fpu_cache_plan_fixture_address + 0xA0u,
         fpu_cache_plan_fixture_address + 0xC0u,
+        fpu_cache_plan_fixture_address + 0xE0u,
     };
     const auto functions = katana::analysis::discover_functions(lines, seeds);
     return katana::ir::lower_program(lines, functions);
@@ -411,6 +424,11 @@ int main(const int argc, char* argv[]) {
     require(cache_plan_conservative_source.find("katana::runtime::NativeAotRegisterFile<") ==
                 std::string::npos,
             "Der konservative FPU-Cacheplan darf keine NativeRegisterFile waehlen.");
+    require(cache_plan_optimized_source.find("direct_linear_guard_read_u32_group(") !=
+                std::string::npos &&
+                cache_plan_conservative_source.find("direct_linear_guard_read_u32_group(") ==
+                std::string::npos,
+            "Die FMOV-Lesegruppe hat keinen getrennten optimierten und skalaren Pfad.");
 
     std::cout << "FPU-Decoder-, IR- und Codegen-Pipeline erfolgreich.\n";
     return EXIT_SUCCESS;
