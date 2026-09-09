@@ -4,6 +4,7 @@
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
@@ -19,6 +20,9 @@ namespace {
 constexpr std::uint32_t base_address = 0x100u;
 constexpr std::uint32_t fmov_cache_fixture_address = 0x200u;
 constexpr std::uint32_t fmov_delay_fixture_address = 0x222u;
+constexpr std::uint32_t fpu_cache_plan_fixture_address = 0x300u;
+constexpr std::uint32_t fpu_cache_plan_slot_size = 0x20u;
+constexpr std::size_t fpu_cache_plan_slot_count = 7u;
 constexpr std::array<std::uint8_t, 54> fixture = {
     0x9Du, 0xF0u, 0x9Du, 0xF1u, 0x00u, 0xF1u, 0x02u, 0xF1u, 0x0Du, 0xF2u, 0x1Du,
     0xF3u, 0x0Bu, 0x00u, 0x09u, 0x00u, 0xFDu, 0xFBu, 0xFDu, 0xF3u, 0x0Bu, 0x00u,
@@ -134,11 +138,121 @@ std::vector<katana::ir::Function> build_fmov_cache_program() {
     return katana::ir::lower_program(lines, functions);
 }
 
+std::vector<katana::ir::Function> build_fpu_cache_plan_program() {
+    std::vector<std::uint8_t> bytes(
+        static_cast<std::size_t>(fpu_cache_plan_slot_size) * fpu_cache_plan_slot_count);
+    for (std::size_t index = 0; index < bytes.size(); index += 2u) {
+        bytes[index] = 0x09u;
+        bytes[index + 1u] = 0x00u;
+    }
+
+    const auto place = [&bytes](const std::size_t slot, const auto& sequence) {
+        std::copy(
+            sequence.begin(),
+            sequence.end(),
+            bytes.begin() + slot * static_cast<std::size_t>(fpu_cache_plan_slot_size));
+    };
+
+    constexpr std::array<std::uint8_t, 14> fpul_convert = {
+        0x5Au, 0x08u, // sts fpul,r8
+        0x01u, 0x78u, // add #1,r8
+        0x20u, 0xF4u, // fadd dr2,dr4
+        0xBDu, 0xF0u, // fcnvds dr0,fpul
+        0x5Au, 0x09u, // sts fpul,r9
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u, // nop
+    };
+    constexpr std::array<std::uint8_t, 14> fpul_float = {
+        0x03u, 0xE8u, // mov #3,r8
+        0x5Au, 0x48u, // lds r8,fpul
+        0x8Du, 0xF0u, // fldi0 fr0
+        0x2Du, 0xF4u, // float fpul,fr4
+        0x5Au, 0x09u, // sts fpul,r9
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u, // nop
+    };
+    constexpr std::array<std::uint8_t, 16> fpul_sca = {
+        0x40u, 0xE8u, // mov #0x40,r8
+        0x18u, 0x48u, // shll8 r8
+        0x5Au, 0x48u, // lds r8,fpul
+        0x8Du, 0xF0u, // fldi0 fr0
+        0xFDu, 0xF4u, // fsca fpul,dr2
+        0x5Au, 0x09u, // sts fpul,r9
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u, // nop
+    };
+    constexpr std::array<std::uint8_t, 20> compare_and_delay_fmov = {
+        0x10u, 0xE8u, // mov #0x10,r8
+        0x01u, 0x78u, // add #1,r8
+        0x08u, 0x00u, // clrt
+        0x05u, 0xF2u, // fcmp/gt fr0,fr2
+        0x29u, 0x09u, // movt r9
+        0x18u, 0x00u, // sett
+        0x04u, 0xF2u, // fcmp/eq fr0,fr2
+        0x29u, 0x0Au, // movt r10
+        0x0Bu, 0x00u, // rts
+        0x0Cu, 0xF6u, // fmov fr0,fr6 (delay slot)
+    };
+    constexpr std::array<std::uint8_t, 28> vector_and_fpul = {
+        0x03u, 0xE8u, // mov #3,r8
+        0x02u, 0x78u, // add #2,r8
+        0x0Cu, 0xF2u, // fmov fr0,fr2
+        0x4Du, 0xF2u, // fneg fr2
+        0x5Du, 0xF2u, // fabs fr2
+        0x8Du, 0xF4u, // fldi0 fr4
+        0x9Du, 0xF5u, // fldi1 fr5
+        0x5Eu, 0xF6u, // fmac fr0,fr5,fr6
+        0xEDu, 0xF8u, // fipr fv0,fv8
+        0xFDu, 0xF9u, // ftrv xmtrx,fv8
+        0x1Du, 0xF8u, // flds fr8,fpul
+        0x0Du, 0xFCu, // fsts fpul,fr12
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u, // nop
+    };
+    constexpr std::array<std::uint8_t, 8> delay_fmov = {
+        0x01u, 0xE8u, // mov #1,r8
+        0x01u, 0x78u, // add #1,r8
+        0x0Bu, 0x00u, // rts
+        0x0Cu, 0xF2u, // fmov fr0,fr2 (delay slot)
+    };
+    constexpr std::array<std::uint8_t, 14> unknown_ram_cycle = {
+        0x50u, 0xE8u, // mov #0x50,r8
+        0x04u, 0xE0u, // mov #4,r0
+        0x04u, 0x78u, // add #4,r8
+        0x02u, 0x28u, // mov.l r0,@r8
+        0x82u, 0x69u, // mov.l @r8,r9
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u, // nop
+    };
+
+    place(0u, fpul_convert);
+    place(1u, fpul_float);
+    place(2u, fpul_sca);
+    place(3u, compare_and_delay_fmov);
+    place(4u, vector_and_fpul);
+    place(5u, delay_fmov);
+    place(6u, unknown_ram_cycle);
+
+    const auto lines = katana::sh4::disassemble(bytes, fpu_cache_plan_fixture_address);
+    constexpr std::array<std::uint32_t, fpu_cache_plan_slot_count> seeds = {
+        fpu_cache_plan_fixture_address + 0x00u,
+        fpu_cache_plan_fixture_address + 0x20u,
+        fpu_cache_plan_fixture_address + 0x40u,
+        fpu_cache_plan_fixture_address + 0x60u,
+        fpu_cache_plan_fixture_address + 0x80u,
+        fpu_cache_plan_fixture_address + 0xA0u,
+        fpu_cache_plan_fixture_address + 0xC0u,
+    };
+    const auto functions = katana::analysis::discover_functions(lines, seeds);
+    return katana::ir::lower_program(lines, functions);
+}
+
 std::string emit_cache_variant(
     const std::span<const katana::ir::Function> program,
+    const std::uint32_t entry_address,
     const bool localize_registers,
     const std::string_view symbol_namespace) {
-    katana::codegen::BackendRequest request{program, fmov_cache_fixture_address};
+    katana::codegen::BackendRequest request{program, entry_address};
     request.symbol_namespace = symbol_namespace;
     request.single_block_execution = true;
     request.guarded_local_block_chaining = true;
@@ -149,6 +263,7 @@ std::string emit_cache_variant(
 int emit_fixture(const std::string& output_path) {
     const auto program = build_program();
     const auto cache_program = build_fmov_cache_program();
+    const auto cache_plan_program = build_fpu_cache_plan_program();
     auto source = katana::codegen::emit_cpp_program(program, base_address);
     // The observer contract forces the independent, per-instruction emission
     // path. Execute it against the optimized path for arithmetic/trap/PC parity.
@@ -159,12 +274,24 @@ int emit_fixture(const std::string& output_path) {
     source += katana::codegen::CppBackend{}.emit(reference).joined_text();
     source += emit_cache_variant(
         std::span<const katana::ir::Function>{cache_program},
+        fmov_cache_fixture_address,
         true,
         "katana_fpu_cache_optimized");
     source += emit_cache_variant(
         std::span<const katana::ir::Function>{cache_program},
+        fmov_cache_fixture_address,
         false,
         "katana_fpu_cache_conservative");
+    source += emit_cache_variant(
+        std::span<const katana::ir::Function>{cache_plan_program},
+        fpu_cache_plan_fixture_address,
+        true,
+        "katana_fpu_cache_plan_optimized");
+    source += emit_cache_variant(
+        std::span<const katana::ir::Function>{cache_plan_program},
+        fpu_cache_plan_fixture_address,
+        false,
+        "katana_fpu_cache_plan_conservative");
     std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
     output.write(source.data(), static_cast<std::streamsize>(source.size()));
     return output ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -199,6 +326,21 @@ int main(const int argc, char* argv[]) {
             "FIPR wird nicht dekodiert.");
     require(katana::sh4::decode(0xF9FDu).kind == InstructionKind::Ftrv,
             "FTRV wird nicht dekodiert.");
+    require(katana::sh4::decode(0xF0BDu).kind == InstructionKind::FcnvDoubleToSingle,
+            "FCNVDS DR0 wird nicht dekodiert.");
+    require(katana::sh4::decode(0x085Au).kind == InstructionKind::StoreSpecialRegister &&
+                katana::sh4::decode(0x085Au).special_register == katana::sh4::SpecialRegister::Fpul &&
+                katana::sh4::decode(0x485Au).kind == InstructionKind::LoadSpecialRegister &&
+                katana::sh4::decode(0x485Au).special_register == katana::sh4::SpecialRegister::Fpul,
+            "Die FPUL-Transferformen werden falsch dekodiert.");
+    require(katana::sh4::decode(0xF4FDu).kind == InstructionKind::Fsca &&
+                katana::sh4::decode(0xF65Eu).kind == InstructionKind::Fmac &&
+                katana::sh4::decode(0xF8EDu).kind == InstructionKind::Fipr &&
+                katana::sh4::decode(0xF9FDu).kind == InstructionKind::Ftrv,
+            "Die Vektor-/FSCA-Formen werden falsch dekodiert.");
+    require(katana::sh4::decode(0xF205u).kind == InstructionKind::FcmpGreater &&
+                katana::sh4::decode(0xF204u).kind == InstructionKind::FcmpEqual,
+            "Die FCMP-Formen werden falsch dekodiert.");
     require(katana::sh4::decode(0xF028u).kind == InstructionKind::FmovLoad &&
                 katana::sh4::decode(0xF249u).kind == InstructionKind::FmovLoadPostIncrement &&
                 katana::sh4::decode(0xF466u).kind == InstructionKind::FmovLoadR0Indexed &&
@@ -214,6 +356,7 @@ int main(const int argc, char* argv[]) {
 
     const auto program = build_program();
     const auto cache_program = build_fmov_cache_program();
+    const auto cache_plan_program = build_fpu_cache_plan_program();
     const auto source = katana::codegen::emit_cpp_program(program, base_address);
     require(source.find("katana::runtime::fpu_binary") != std::string::npos &&
                 source.find("cpu.toggle_fpu_register_bank()") != std::string::npos &&
@@ -224,10 +367,12 @@ int main(const int argc, char* argv[]) {
 
     const auto cache_optimized_source = emit_cache_variant(
         std::span<const katana::ir::Function>{cache_program},
+        fmov_cache_fixture_address,
         true,
         "katana_fpu_cache_optimized");
     const auto cache_conservative_source = emit_cache_variant(
         std::span<const katana::ir::Function>{cache_program},
+        fmov_cache_fixture_address,
         false,
         "katana_fpu_cache_conservative");
     const auto delay_body = cache_optimized_source.rfind("fn_00000222_with_services");
@@ -244,6 +389,28 @@ int main(const int argc, char* argv[]) {
                 cache_optimized_source.find("katana::runtime::NativeAotRegisterFile<",
                                             delay_body) < delay_body_end,
             "FMOV-Cachefixture erzeugt keinen getrennten lokalisierten und konservativen Emitterpfad.");
+
+    const auto cache_plan_optimized_source = emit_cache_variant(
+        std::span<const katana::ir::Function>{cache_plan_program},
+        fpu_cache_plan_fixture_address,
+        true,
+        "katana_fpu_cache_plan_optimized");
+    const auto cache_plan_conservative_source = emit_cache_variant(
+        std::span<const katana::ir::Function>{cache_plan_program},
+        fpu_cache_plan_fixture_address,
+        false,
+        "katana_fpu_cache_plan_conservative");
+    require(cache_plan_optimized_source.find("katana::runtime::NativeAotRegisterFile<") !=
+                    std::string::npos &&
+                cache_plan_optimized_source.find("katana_registers.fpul()") !=
+                    std::string::npos &&
+                cache_plan_optimized_source.find("katana_registers.t()") != std::string::npos &&
+                cache_plan_optimized_source.find("fn_00000300") != std::string::npos &&
+                cache_plan_optimized_source.find("fn_000003C0") != std::string::npos,
+            "Der erweiterte FPU-Cacheplan waehlt nicht GPR, FPUL, T und alle Eintraege.");
+    require(cache_plan_conservative_source.find("katana::runtime::NativeAotRegisterFile<") ==
+                std::string::npos,
+            "Der konservative FPU-Cacheplan darf keine NativeRegisterFile waehlen.");
 
     std::cout << "FPU-Decoder-, IR- und Codegen-Pipeline erfolgreich.\n";
     return EXIT_SUCCESS;

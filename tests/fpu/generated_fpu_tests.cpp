@@ -69,6 +69,35 @@ void prepare_fmov_cache_fixture(katana_generated::CpuState& cpu,
     cpu.memory.write_u32(0x7Cu, 0u);
 }
 
+void prepare_fpu_cache_plan_fixture(katana_generated::CpuState& cpu,
+                                    const std::uint32_t fpscr) {
+    prepare_fmov_cache_fixture(cpu, fpscr);
+    cpu.r.fill(0u);
+    cpu.r_bank.fill(0u);
+    cpu.fr.fill(0u);
+    cpu.xf.fill(0u);
+    cpu.fpul = 0xDEADBEEFu;
+    cpu.t = false;
+
+    // The PR=1 slots use DR2/DR4 and the vector operations use the ordinary
+    // FR bank.  Keep the matrix in XF so FTRV observes an identity XMTRX.
+    katana::runtime::write_dr_double(cpu, 0u, 1.5);
+    katana::runtime::write_dr_double(cpu, 2u, 2.0);
+    katana::runtime::write_dr_double(cpu, 4u, 3.0);
+    cpu.fr[0] = std::bit_cast<std::uint32_t>(2.0f);
+    cpu.fr[1] = std::bit_cast<std::uint32_t>(3.0f);
+    cpu.fr[3] = std::bit_cast<std::uint32_t>(4.0f);
+    cpu.fr[6] = std::bit_cast<std::uint32_t>(5.0f);
+    cpu.fr[8] = std::bit_cast<std::uint32_t>(1.0f);
+    cpu.fr[9] = std::bit_cast<std::uint32_t>(2.0f);
+    cpu.fr[10] = std::bit_cast<std::uint32_t>(3.0f);
+    cpu.fr[11] = std::bit_cast<std::uint32_t>(4.0f);
+    cpu.xf[0] = std::bit_cast<std::uint32_t>(1.0f);
+    cpu.xf[5] = std::bit_cast<std::uint32_t>(1.0f);
+    cpu.xf[10] = std::bit_cast<std::uint32_t>(1.0f);
+    cpu.xf[15] = std::bit_cast<std::uint32_t>(1.0f);
+}
+
 [[nodiscard]] bool same_fmov_cache_architecture(
     const katana_generated::CpuState& a,
     const katana_generated::CpuState& b) {
@@ -98,6 +127,18 @@ void run_fmov_cache_fixture(katana_generated::CpuState& cpu, Function function) 
         if (cpu.trap_pending || cpu.pc < 0x200u || cpu.pc >= 0x22Au) return;
     }
     require(false, "Die kompilierte FMOV-Fixture hat ihren begrenzten Resume-Pfad nicht beendet.");
+}
+
+template <typename Function>
+void run_fpu_cache_plan_fixture(katana_generated::CpuState& cpu, Function function) {
+    // A guarded memory operation can resume at the same generated function;
+    // this bounded re-entry models that edge without decoding or interpreting
+    // the fixture a second time.
+    for (unsigned boundary = 0u; boundary < 16u; ++boundary) {
+        function(cpu);
+        if (cpu.trap_pending || cpu.pc < 0x300u || cpu.pc >= 0x3E0u) return;
+    }
+    require(false, "Der erweiterte FPU-Cacheplan hat seinen Resume-Pfad nicht beendet.");
 }
 
 class GeneratedFpuServices final : public katana::runtime::PlatformServices {
@@ -740,6 +781,149 @@ int main() {
                     optimized->memory.read_u32(0x50u) == 0u &&
                     optimized->memory.read_u32(0x54u) == 0x40800000u,
                 "FMOV verwendet nach dem Cycleprovider eine veraltete Storeadresse.");
+    }
+
+    {
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        prepare_fpu_cache_plan_fixture(
+            *optimized,
+            katana::runtime::fpscr_dn_mask | katana::runtime::fpscr_pr_mask);
+        prepare_fpu_cache_plan_fixture(
+            *conservative,
+            katana::runtime::fpscr_dn_mask | katana::runtime::fpscr_pr_mask);
+        katana::runtime::write_dr_double(*optimized, 0u, 1.5);
+        katana::runtime::write_dr_double(*optimized, 2u, 2.0);
+        katana::runtime::write_dr_double(*optimized, 4u, 3.0);
+        katana::runtime::write_dr_double(*conservative, 0u, 1.5);
+        katana::runtime::write_dr_double(*conservative, 2u, 2.0);
+        katana::runtime::write_dr_double(*conservative, 4u, 3.0);
+        optimized->pc = conservative->pc = 0x300u;
+        run_fpu_cache_plan_fixture(*optimized, katana_fpu_cache_plan_optimized::fn_00000300);
+        run_fpu_cache_plan_fixture(*conservative, katana_fpu_cache_plan_conservative::fn_00000300);
+        require(same_fmov_cache_architecture(*optimized, *conservative) &&
+                    optimized->r[9] == 0x3FC00000u && optimized->fpul == 0x3FC00000u &&
+                    read_dr_double(*optimized, 4u) == 5.0,
+                "Der FPUL-/DR-Cacheplan verliert FCNVDS oder PR=1-FADD.");
+    }
+
+    {
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        prepare_fpu_cache_plan_fixture(*optimized, katana::runtime::fpscr_dn_mask);
+        prepare_fpu_cache_plan_fixture(*conservative, katana::runtime::fpscr_dn_mask);
+        optimized->pc = conservative->pc = 0x320u;
+        run_fpu_cache_plan_fixture(*optimized, katana_fpu_cache_plan_optimized::fn_00000320);
+        run_fpu_cache_plan_fixture(*conservative, katana_fpu_cache_plan_conservative::fn_00000320);
+        require(same_fmov_cache_architecture(*optimized, *conservative) &&
+                    optimized->fpul == 3u && optimized->r[9] == 3u &&
+                    optimized->fr[4] == std::bit_cast<std::uint32_t>(3.0f),
+                "Der FPUL-Cacheplan verliert LDS/FLOAT oder den anschliessenden STS.");
+    }
+
+    {
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        prepare_fpu_cache_plan_fixture(*optimized, katana::runtime::fpscr_dn_mask);
+        prepare_fpu_cache_plan_fixture(*conservative, katana::runtime::fpscr_dn_mask);
+        optimized->pc = conservative->pc = 0x340u;
+        run_fpu_cache_plan_fixture(*optimized, katana_fpu_cache_plan_optimized::fn_00000340);
+        run_fpu_cache_plan_fixture(*conservative, katana_fpu_cache_plan_conservative::fn_00000340);
+        require(same_fmov_cache_architecture(*optimized, *conservative) &&
+                    optimized->fpul == 0x4000u && optimized->r[9] == 0x4000u &&
+                    std::fabs(std::bit_cast<float>(optimized->fr[4]) - 1.0f) < 1.0e-6f &&
+                    std::fabs(std::bit_cast<float>(optimized->fr[5])) < 1.0e-6f,
+                "Der FSCA-Cacheplan verliert den 0x4000-Quadrantenanker.");
+    }
+
+    {
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        prepare_fpu_cache_plan_fixture(*optimized, katana::runtime::fpscr_dn_mask);
+        prepare_fpu_cache_plan_fixture(*conservative, katana::runtime::fpscr_dn_mask);
+        optimized->fr[0] = std::bit_cast<std::uint32_t>(1.0f);
+        optimized->fr[2] = std::bit_cast<std::uint32_t>(2.0f);
+        conservative->fr[0] = std::bit_cast<std::uint32_t>(1.0f);
+        conservative->fr[2] = std::bit_cast<std::uint32_t>(2.0f);
+        optimized->pc = conservative->pc = 0x360u;
+        run_fpu_cache_plan_fixture(*optimized, katana_fpu_cache_plan_optimized::fn_00000360);
+        run_fpu_cache_plan_fixture(*conservative, katana_fpu_cache_plan_conservative::fn_00000360);
+        require(same_fmov_cache_architecture(*optimized, *conservative) &&
+                    optimized->r[8] == 0x11u && optimized->r[9] == 1u &&
+                    optimized->r[10] == 0u && !optimized->t &&
+                    optimized->fr[6] == std::bit_cast<std::uint32_t>(1.0f),
+                "Der T-/Delay-FMOV-Cacheplan verliert Vergleichs- oder Delayzustand.");
+    }
+
+    {
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        prepare_fpu_cache_plan_fixture(*optimized, katana::runtime::fpscr_dn_mask);
+        prepare_fpu_cache_plan_fixture(*conservative, katana::runtime::fpscr_dn_mask);
+        optimized->pc = conservative->pc = 0x380u;
+        run_fpu_cache_plan_fixture(*optimized, katana_fpu_cache_plan_optimized::fn_00000380);
+        run_fpu_cache_plan_fixture(*conservative, katana_fpu_cache_plan_conservative::fn_00000380);
+        require(same_fmov_cache_architecture(*optimized, *conservative) &&
+                    optimized->r[8] == 5u && optimized->fr[6] == std::bit_cast<std::uint32_t>(7.0f) &&
+                    optimized->fr[11] == std::bit_cast<std::uint32_t>(30.0f) &&
+                    optimized->fpul == std::bit_cast<std::uint32_t>(1.0f) &&
+                    optimized->fr[12] == std::bit_cast<std::uint32_t>(1.0f),
+                "Der Vektor-/FPUL-Cacheplan verliert FMAC, FIPR/FTRV oder FPUL.");
+    }
+
+    {
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        prepare_fpu_cache_plan_fixture(*optimized, katana::runtime::fpscr_dn_mask);
+        prepare_fpu_cache_plan_fixture(*conservative, katana::runtime::fpscr_dn_mask);
+        optimized->write_sr(katana::runtime::sr_fd_mask);
+        conservative->write_sr(katana::runtime::sr_fd_mask);
+        optimized->fr[0] = conservative->fr[0] = std::bit_cast<std::uint32_t>(1.0f);
+        optimized->fr[2] = conservative->fr[2] = 0xA5A5A5A5u;
+        optimized->pc = conservative->pc = 0x3A0u;
+        katana_fpu_cache_plan_optimized::fn_000003A0(*optimized);
+        katana_fpu_cache_plan_conservative::fn_000003A0(*conservative);
+        require(same_fmov_cache_architecture(*optimized, *conservative) &&
+                    optimized->last_exception_cause ==
+                        katana::runtime::ExceptionCause::SlotFpuDisabled &&
+                    optimized->exception_in_delay_slot && optimized->spc == 0x3A4u &&
+                    optimized->r[8] == 2u &&
+                    optimized->fr[2] == 0xA5A5A5A5u,
+                "FPU-Sperre im Cacheplan-Delay-Slot verliert den gehaltenen GPR-Zustand.");
+    }
+
+    {
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        prepare_fpu_cache_plan_fixture(*optimized, katana::runtime::fpscr_dn_mask);
+        prepare_fpu_cache_plan_fixture(*conservative, katana::runtime::fpscr_dn_mask);
+        GeneratedFpuServices optimized_services(*optimized);
+        GeneratedFpuServices conservative_services(*conservative);
+        std::array<bool, 2> updated_address{};
+        const auto attach_provider = [&](auto& cpu, auto& services, const std::size_t index) {
+            auto* state = &cpu;
+            services.on_consume_cycles = [state, index, &updated_address] {
+                if (updated_address[index] || state->r[8] != 0x54u) return;
+                state->r[8] = 0x58u;
+                updated_address[index] = true;
+            };
+        };
+        attach_provider(*optimized, optimized_services, 0u);
+        attach_provider(*conservative, conservative_services, 1u);
+        optimized->pc = conservative->pc = 0x3C0u;
+        run_fpu_cache_plan_fixture(*optimized, [&](auto& cpu) {
+            katana_fpu_cache_plan_optimized::fn_000003C0_with_services(
+                cpu, &optimized_services);
+        });
+        run_fpu_cache_plan_fixture(*conservative, [&](auto& cpu) {
+            katana_fpu_cache_plan_conservative::fn_000003C0_with_services(
+                cpu, &conservative_services);
+        });
+        require(same_fmov_cache_architecture(*optimized, *conservative) &&
+                    updated_address[0] && updated_address[1] &&
+                    optimized->memory.read_u32(0x54u) == 0u &&
+                    optimized->memory.read_u32(0x58u) == 4u && optimized->r[9] == 4u,
+                "Der MMIO-/Observer-Fallback verliert die Provider-Mutation der Storeadresse.");
     }
 
     {

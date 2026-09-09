@@ -2808,11 +2808,32 @@ void emit_simple_instruction(std::ostringstream& output,
                              const katana::ir::Instruction& instruction,
                              const int indent,
                              const NativeRegisterEmission& registers = {}) {
+    // Keep CpuState/helper bridges outside lexical localization, including
+    // interior operations of a shared non-faulting host FPU epoch.
+    if (registers.scalar(katana::ir::TrackedRegister::Fpul) &&
+        (instruction.operation == katana::ir::Operation::FloatFromFpul ||
+         instruction.operation == katana::ir::Operation::Fsca ||
+         instruction.operation == katana::ir::Operation::FcnvSingleToDouble)) {
+        emit_indent(output, indent);
+        output << "cpu.fpul = katana_registers.fpul();\n";
+    }
     std::ostringstream fragment;
     emit_simple_instruction_raw(fragment, instruction, indent);
     auto text = fragment.str();
     localize_instruction_fragment(text, registers);
     output << text;
+    if (registers.scalar(katana::ir::TrackedRegister::Fpul) &&
+        (instruction.operation == katana::ir::Operation::Ftrc ||
+         instruction.operation == katana::ir::Operation::FcnvDoubleToSingle)) {
+        emit_indent(output, indent);
+        output << "katana_registers.fpul() = cpu.fpul;\n";
+    }
+    if (registers.scalar(katana::ir::TrackedRegister::T) &&
+        (instruction.operation == katana::ir::Operation::FcmpEqual ||
+         instruction.operation == katana::ir::Operation::FcmpGreater)) {
+        emit_indent(output, indent);
+        output << "katana_registers.t() = cpu.t;\n";
+    }
 }
 
 void emit_instruction_observer(std::ostringstream& output,
@@ -2832,6 +2853,30 @@ bool requires_post_instruction_architectural_safepoint(
     return detail::native_aot_requires_architectural_resume(instruction);
 }
 
+bool fpu_operation_keeps_native_registers(
+    const katana::ir::Instruction& instruction) noexcept {
+    using Operation = katana::ir::Operation;
+    // Bodies do not enter exceptions or call providers. FD/mode guards still
+    // publish the cache before their architectural exception exits.
+    switch (instruction.operation) {
+    case Operation::FmovRegister:
+    case Operation::Fldi0:
+    case Operation::Fldi1:
+    case Operation::Fabs:
+    case Operation::Fneg:
+    case Operation::Fipr:
+    case Operation::Ftrv:
+    case Operation::Fmac:
+    case Operation::Flds:
+    case Operation::Fsts:
+    case Operation::FcmpEqual:
+    case Operation::FcmpGreater:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool requires_native_register_boundary(
     const katana::ir::Instruction& instruction,
     const bool external_instruction_observer) noexcept {
@@ -2839,7 +2884,8 @@ bool requires_native_register_boundary(
 
     if (external_instruction_observer || instruction.is_privileged ||
         instruction.operation == Operation::Unknown ||
-        is_fpu_operation(instruction) ||
+        (is_fpu_operation(instruction) &&
+         !fpu_operation_keeps_native_registers(instruction)) ||
         requires_post_instruction_architectural_safepoint(instruction))
         return true;
 
@@ -3166,8 +3212,10 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
           guarded_linear_access_keeps_native_registers(
               instruction, external_instruction_observer));
     const NativeRegisterEmission unlocalized_registers;
-    const bool localized_fpu_memory = registers.enabled() &&
-        !register_boundary && is_fpu_operation(instruction) && may_raise_memory_error;
+    const bool retained_memory_registers = registers.enabled() &&
+        !register_boundary && may_raise_memory_error;
+    const bool localized_fpu_memory = retained_memory_registers &&
+        is_fpu_operation(instruction);
     emit_indent(output, indent);
     output << "{\n";
     emit_indent(output, indent);
@@ -3187,7 +3235,7 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
                    << " && services != nullptr) ";
         else
             output << "if (services != nullptr) ";
-        if (localized_fpu_memory) {
+        if (retained_memory_registers) {
             output << "{\n";
             emit_register_flush_release(output, indent + 2, registers);
             emit_indent(output, indent + 2);

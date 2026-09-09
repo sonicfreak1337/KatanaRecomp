@@ -1,6 +1,6 @@
 # Aktueller Projektstand
 
-Stand: 9. September 2026, r322-Matrix und gezielte r325/r326-Laeufe abgeschlossen. Historische Runs und
+Stand: 9. September 2026, r322-Matrix und gezielte r325--r327-Laeufe abgeschlossen. Historische Runs und
 Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
 Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
 
@@ -210,6 +210,23 @@ Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
   bleibt deutlich verfehlt. Eine isolierte Compileanalyse ordnet etwa 95
   Prozent der Compilerzeit dem Backend zu; Headerverarbeitung ist in dieser
   Probe kein grosser Hebel. Das ist ein Compilerbefund, kein Produktgewinn.
+- r327 erhaelt den nativen Registercache auch ueber zwoelf nicht speichernde
+  FPU-Operationen. Explizite FPUL-/T-Bruecken verhindern, dass ein FCNVDS-
+  Ergebnis innerhalb einer FPU-Epoche durch einen alten Cachewert ersetzt
+  wird. Der neue Native-Test reproduziert diesen Fehler vor der Korrektur;
+  danach bestehen die drei betroffenen FPU-/Codegen-Targets. Veraendernde
+  Zyklusprovider erhalten auch an nicht-FMOV-Speichergrenzen den aktuellen
+  Zustand. Modulbindungen und alle 953.473 Dispatchentries bleiben erhalten.
+- Alle sechs sichtbaren r327-Bewegungsfenster bestehen 60 Sekunden ohne
+  Capsule: Windy Valley 20,88; Emerald Coast 26,39; Sonic Twinkle Park 23,29;
+  Knuckles Lost World 21,95; Amy Twinkle Park 23,08; Amy Hot Shelter 29,63
+  Sim-FPS. Die Praesentation liegt bei 132--142 FPS. Das sind gegen r326
+  ueberwiegend kleine Verbesserungen bei leicht niedrigerem Emerald Coast;
+  angesichts der vorherigen Streuung ist kein allgemeiner Leistungspuffer
+  belegt. Amys spaeter langsamer Abschnitt bleibt ungeprueft. Der komplette
+  Wrapper dauert 40 Minuten 44 Sekunden, der Hostbuild 34 Minuten 26 Sekunden
+  bei 16 Jobs. Dies bleibt ein voller AOT-Neubau mit vorhandenen Analyseinputs,
+  kein Kaltnachweis und keine Erfuellung des Zehn-Minuten-Ziels.
 - Sky Chase, Chao Garden und weitere noch nicht erreichte Storyfortsetzungen
   sind nicht pauschal freigegeben. Ein neuer unbekannter Block endet weiterhin
   fail-closed; ein fehlender Crashrecord ist kein Beweis fuer Fehlerfreiheit.
