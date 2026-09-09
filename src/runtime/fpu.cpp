@@ -1167,9 +1167,28 @@ void fpu_multiply_accumulate(CpuState& cpu,
     detail::fpu_multiply_accumulate_scalar(cpu, source, destination);
 }
 
+namespace {
+
+[[nodiscard]] bool normal_or_zero_single_bits(const std::uint32_t bits) noexcept {
+    const auto magnitude = bits & 0x7FFFFFFFu;
+    return magnitude == 0u ||
+           (magnitude >= 0x00800000u && magnitude < 0x7F800000u);
+}
+
+} // namespace
+
 void fpu_compare_equal(CpuState& cpu,
                        const std::uint8_t source,
                        const std::uint8_t destination) noexcept {
+    if (!double_precision(cpu)) {
+        const auto n = cpu.fr[destination & 0x0Fu];
+        const auto m = cpu.fr[source & 0x0Fu];
+        if (normal_or_zero_single_bits(n) && normal_or_zero_single_bits(m)) {
+            clear_fpu_causes(cpu);
+            cpu.t = n == m || ((n | m) & 0x7FFFFFFFu) == 0u;
+            return;
+        }
+    }
     const ScopedHostRounding rounding(cpu);
     clear_fpu_causes(cpu);
     cpu.t = double_precision(cpu)
@@ -1180,6 +1199,22 @@ void fpu_compare_equal(CpuState& cpu,
 void fpu_compare_greater(CpuState& cpu,
                          const std::uint8_t source,
                          const std::uint8_t destination) noexcept {
+    if (!double_precision(cpu)) {
+        const auto n = cpu.fr[destination & 0x0Fu];
+        const auto m = cpu.fr[source & 0x0Fu];
+        if (normal_or_zero_single_bits(n) && normal_or_zero_single_bits(m)) {
+            clear_fpu_causes(cpu);
+            const auto n_magnitude = n & 0x7FFFFFFFu;
+            const auto m_magnitude = m & 0x7FFFFFFFu;
+            cpu.t = (n_magnitude | m_magnitude) != 0u &&
+                    (((n ^ m) & 0x80000000u) != 0u
+                         ? (n & 0x80000000u) == 0u
+                         : (n & 0x80000000u) != 0u
+                               ? n_magnitude < m_magnitude
+                               : n_magnitude > m_magnitude);
+            return;
+        }
+    }
     const ScopedHostRounding rounding(cpu);
     clear_fpu_causes(cpu);
     cpu.t = double_precision(cpu)

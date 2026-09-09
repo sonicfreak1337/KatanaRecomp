@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -29,6 +30,74 @@ void require(const bool condition, const std::string& message) {
         std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n';
         std::exit(EXIT_FAILURE);
     }
+}
+
+void prepare_fmov_cache_fixture(katana_generated::CpuState& cpu,
+                                const std::uint32_t fpscr) {
+    cpu.memory = katana::runtime::Memory(0u);
+    auto backing = std::make_shared<katana::runtime::LinearMemoryDevice>(0x100u);
+    cpu.memory.map_region("fixture-physical", 0u, backing);
+    cpu.memory.set_lookup_mode(katana::runtime::MemoryLookupMode::Indexed);
+    cpu.memory.bind_direct_linear_alias_window(0u, 0x100u, *backing);
+    std::uint32_t guard_offset = 0u;
+    require(katana::runtime::direct_linear_guard_offset(
+                cpu.memory.direct_linear_memory_guard(false), 0x80000020u, 4u, guard_offset),
+            "Die FMOV-Fixture muss den direkten Produkt-RAM-Pfad aktivieren.");
+    cpu.memory.set_alignment_policy(katana::runtime::MemoryAlignmentPolicy::Strict);
+    cpu.write_sr(0u);
+    cpu.write_fpscr(fpscr);
+    cpu.pr = 0x4000u;
+    cpu.r[1] = 0xDEADBEEFu;
+    cpu.fr[0] = 0xAAAAAAAAu;
+    cpu.fr[2] = 0xBBBBBBBBu;
+    cpu.fr[4] = 0xCCCCCCCCu;
+    cpu.fr[6] = 0x40800000u;
+    cpu.fr[8] = 0x40A00000u;
+    cpu.fr[10] = 0x40C00000u;
+    cpu.fr[12] = 0xDDDDDDDDu;
+    cpu.memory.write_u32(0x20u, 0x3F800000u);
+    cpu.memory.write_u32(0x24u, 0x3F900000u);
+    cpu.memory.write_u32(0x34u, 0x40000000u);
+    cpu.memory.write_u32(0x38u, 0x40100000u);
+    cpu.memory.write_u32(0x48u, 0x40400000u);
+    cpu.memory.write_u32(0x4Cu, 0x40500000u);
+    cpu.memory.write_u32(0x50u, 0u);
+    cpu.memory.write_u32(0x54u, 0u);
+    cpu.memory.write_u32(0x58u, 0u);
+    cpu.memory.write_u32(0x5Cu, 0u);
+    cpu.memory.write_u32(0x78u, 0u);
+    cpu.memory.write_u32(0x7Cu, 0u);
+}
+
+[[nodiscard]] bool same_fmov_cache_architecture(
+    const katana_generated::CpuState& a,
+    const katana_generated::CpuState& b) {
+    return a.r == b.r && a.r_bank == b.r_bank && a.fr == b.fr && a.xf == b.xf &&
+           a.pc == b.pc && a.pr == b.pr && a.fpscr == b.fpscr && a.sr == b.sr &&
+           a.spc == b.spc && a.ssr == b.ssr && a.sgr == b.sgr &&
+           a.fpul == b.fpul && a.t == b.t &&
+           a.tea == b.tea && a.expevt == b.expevt &&
+           a.trap_pending == b.trap_pending &&
+           a.exception_generation == b.exception_generation &&
+           a.last_exception_cause == b.last_exception_cause &&
+           a.exception_in_delay_slot == b.exception_in_delay_slot &&
+           a.last_exception_instruction_pc == b.last_exception_instruction_pc &&
+           a.last_exception_instruction_physical_pc ==
+               b.last_exception_instruction_physical_pc &&
+           a.attempted_guest_instructions == b.attempted_guest_instructions &&
+           a.retired_guest_instructions == b.retired_guest_instructions &&
+           a.pending_guest_cycles == b.pending_guest_cycles;
+}
+
+template <typename Function>
+void run_fmov_cache_fixture(katana_generated::CpuState& cpu, Function function) {
+    // Reenter only the same statically generated function after its exact
+    // store/MMIO resume edges. This is compiled execution, with no decoding.
+    for (unsigned boundary = 0u; boundary < 16u; ++boundary) {
+        function(cpu);
+        if (cpu.trap_pending || cpu.pc < 0x200u || cpu.pc >= 0x22Au) return;
+    }
+    require(false, "Die kompilierte FMOV-Fixture hat ihren begrenzten Resume-Pfad nicht beendet.");
 }
 
 class GeneratedFpuServices final : public katana::runtime::PlatformServices {
@@ -100,6 +169,7 @@ class GeneratedFpuServices final : public katana::runtime::PlatformServices {
     }
     [[nodiscard]] katana::runtime::PlatformSchedulerResult
     consume_guest_cycles(const std::uint64_t guest_cycles, const std::size_t) override {
+        if (on_consume_cycles) on_consume_cycles();
         scheduler_cycle_ += guest_cycles;
         return {scheduler_cycle_, 0u, false, false};
     }
@@ -141,6 +211,7 @@ class GeneratedFpuServices final : public katana::runtime::PlatformServices {
     katana::runtime::Sh4StoreQueues queues_;
     std::vector<katana::runtime::StoreQueueTransfer> transfers;
     std::uint64_t scheduler_cycle_ = 0u;
+    std::function<void()> on_consume_cycles;
 
   private:
     static constexpr const char* fmov_fixture_identity = "generated-fpu-fmov-fixture";
@@ -256,6 +327,57 @@ int main() {
                     cpu.last_exception_instruction_pc == (entry == 0x17Eu ? 0x180u : entry) &&
                     cpu.exception_in_delay_slot == (entry == 0x17Eu),
                 "Generated arithmetic continued after exception or lost delay owner.");
+    }
+
+    {
+        auto prepare_split_store_fixture = [](katana_generated::CpuState& cpu) {
+            cpu.memory = katana::runtime::Memory(0u);
+            cpu.memory.set_alignment_policy(katana::runtime::MemoryAlignmentPolicy::Strict);
+            cpu.memory.map_region(
+                "loads_a", 0x20u, std::make_shared<katana::runtime::LinearMemoryDevice>(0x20u));
+            cpu.memory.map_region(
+                "loads_b", 0x40u, std::make_shared<katana::runtime::LinearMemoryDevice>(0x18u));
+            cpu.memory.map_region(
+                "first_store", 0x58u, std::make_shared<katana::runtime::LinearMemoryDevice>(4u));
+            cpu.memory.map_region(
+                "indexed_store", 0x78u,
+                std::make_shared<katana::runtime::LinearMemoryDevice>(8u));
+            cpu.write_sr(0u);
+            cpu.write_fpscr(katana::runtime::fpscr_sz_mask);
+            cpu.pr = 0x4000u;
+            cpu.r[1] = 0xDEADBEEFu;
+            cpu.fr[0] = 0xAAAAAAAAu;
+            cpu.fr[2] = 0xBBBBBBBBu;
+            cpu.fr[4] = 0xCCCCCCCCu;
+            cpu.fr[6] = 0x40800000u;
+            cpu.fr[8] = 0x40A00000u;
+            cpu.fr[9] = 0x40B00000u;
+            cpu.fr[10] = 0x40C00000u;
+            cpu.fr[11] = 0x40D00000u;
+            cpu.fr[12] = 0xDDDDDDDDu;
+            cpu.memory.write_u32(0x20u, 0x3F800000u);
+            cpu.memory.write_u32(0x24u, 0x3F900000u);
+            cpu.memory.write_u32(0x34u, 0x40000000u);
+            cpu.memory.write_u32(0x38u, 0x40100000u);
+            cpu.memory.write_u32(0x48u, 0x40400000u);
+            cpu.memory.write_u32(0x4Cu, 0x40500000u);
+            cpu.memory.write_u32(0x58u, 0u);
+            cpu.memory.write_u32(0x78u, 0u);
+            cpu.pc = 0x200u;
+        };
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        prepare_split_store_fixture(*optimized);
+        prepare_split_store_fixture(*conservative);
+        run_fmov_cache_fixture(*optimized, katana_fpu_cache_optimized::fn_00000200);
+        run_fmov_cache_fixture(*conservative, katana_fpu_cache_conservative::fn_00000200);
+        require(same_fmov_cache_architecture(*optimized, *conservative) &&
+                    optimized->last_exception_cause ==
+                        katana::runtime::ExceptionCause::AddressErrorWrite &&
+                    optimized->spc == 0x21Au && optimized->r[10] == 0x60u &&
+                    optimized->memory.read_u32(0x58u) == 0x40A00000u &&
+                    optimized->memory.read_u32(0x78u) == 0u,
+                "SZ-FMOV-Predecrement schreibt nicht nur die gueltige erste Haelfte vor dem zweiten Halbwortfehler.");
     }
 
     {
@@ -493,6 +615,131 @@ int main() {
                     cpu.memory.read_u32(0x7Cu) == 0x40400000u &&
                     cpu.memory.read_u32(0x80u) == 0x40400000u && services.fmov_fixture_intact(),
                 "Generierte FMOV-Register- oder Speicherformen sind falsch.");
+    }
+
+    {
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        prepare_fmov_cache_fixture(*optimized, 0u);
+        prepare_fmov_cache_fixture(*conservative, 0u);
+        optimized->pc = conservative->pc = 0x200u;
+        run_fmov_cache_fixture(*optimized, katana_fpu_cache_optimized::fn_00000200);
+        run_fmov_cache_fixture(*conservative, katana_fpu_cache_conservative::fn_00000200);
+        require(same_fmov_cache_architecture(*optimized, *conservative) &&
+                    optimized->r[0] == 0x08u && optimized->r[2] == 0x20u &&
+                    optimized->r[4] == 0x38u && optimized->r[6] == 0x40u &&
+                    optimized->r[8] == 0x50u && optimized->r[10] == 0x5Cu &&
+                    optimized->r[12] == 0x70u && optimized->fr[0] == 0x3F800000u &&
+                    optimized->fr[2] == 0x40000000u && optimized->fr[4] == 0x40400000u &&
+                    optimized->fr[12] == 0x3F800000u &&
+                    optimized->memory.read_u32(0x50u) == 0x40800000u &&
+                    optimized->memory.read_u32(0x5Cu) == 0x40A00000u &&
+                    optimized->memory.read_u32(0x78u) == 0x40C00000u,
+                "Lokalisierte FMOV-Cachefolge verliert GPR-Mutationen, sechs Memoryformen oder den Delay-Load.");
+    }
+
+    {
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        prepare_fmov_cache_fixture(
+            *optimized,
+            katana::runtime::fpscr_pr_mask | katana::runtime::fpscr_sz_mask);
+        prepare_fmov_cache_fixture(
+            *conservative,
+            katana::runtime::fpscr_pr_mask | katana::runtime::fpscr_sz_mask);
+        optimized->pc = conservative->pc = 0x200u;
+        run_fmov_cache_fixture(*optimized, katana_fpu_cache_optimized::fn_00000200);
+        run_fmov_cache_fixture(*conservative, katana_fpu_cache_conservative::fn_00000200);
+        require(same_fmov_cache_architecture(*optimized, *conservative) &&
+                    optimized->last_exception_cause ==
+                        katana::runtime::ExceptionCause::IllegalInstruction &&
+                    optimized->spc == 0x212u && optimized->r_bank[0] == 0x08u &&
+                    optimized->r_bank[4] == 0x34u && optimized->fr[0] == 0xAAAAAAAAu &&
+                    optimized->memory.read_u32(0x50u) == 0u &&
+                    optimized->memory.read_u32(0x5Cu) == 0u,
+                "FMOV bei gleichzeitigem PR+SZ wird nicht vor dem ersten Speicherzugriff abgewiesen.");
+    }
+
+    {
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        prepare_fmov_cache_fixture(*optimized, 0u);
+        prepare_fmov_cache_fixture(*conservative, 0u);
+        optimized->write_sr(katana::runtime::sr_fd_mask);
+        conservative->write_sr(katana::runtime::sr_fd_mask);
+        optimized->r[2] = conservative->r[2] = 0x20u;
+        optimized->fr[6] = conservative->fr[6] = 0xEEEEEEEEu;
+        optimized->pc = conservative->pc = 0x222u;
+        katana_fpu_cache_optimized::fn_00000222(*optimized);
+        katana_fpu_cache_conservative::fn_00000222(*conservative);
+        require(same_fmov_cache_architecture(*optimized, *conservative) &&
+                    optimized->last_exception_cause ==
+                        katana::runtime::ExceptionCause::SlotFpuDisabled &&
+                    optimized->exception_in_delay_slot && optimized->spc == 0x226u &&
+                    optimized->r_bank[2] == 0x20u &&
+                    optimized->fr[6] == 0xEEEEEEEEu &&
+                    optimized->memory.read_u32(0x20u) == 0x3F800000u,
+                "FPU-disabled FMOV im RTS-Delay-Slot veraendert den Zielzustand.");
+    }
+
+    {
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        prepare_fmov_cache_fixture(*optimized, 0u);
+        prepare_fmov_cache_fixture(*conservative, 0u);
+        std::array<bool, 2> observed_current_registers{};
+        const auto attach_observer = [&](auto& cpu, const std::size_t index) {
+            cpu.memory.set_guest_write_observer([&, index](const auto& event) {
+                if (event.address != 0x50u) return;
+                observed_current_registers[index] =
+                    cpu.r[0] == 0x08u && cpu.r[4] == 0x38u;
+                cpu.r[2] = 0x24u;
+            });
+        };
+        attach_observer(*optimized, 0u);
+        attach_observer(*conservative, 1u);
+        optimized->pc = conservative->pc = 0x200u;
+        run_fmov_cache_fixture(*optimized, katana_fpu_cache_optimized::fn_00000200);
+        run_fmov_cache_fixture(*conservative, katana_fpu_cache_conservative::fn_00000200);
+        require(same_fmov_cache_architecture(*optimized, *conservative) &&
+                    observed_current_registers[0] && observed_current_registers[1] &&
+                    optimized->r[2] == 0x24u && optimized->fr[12] == 0x3F900000u &&
+                    optimized->memory.read_u32(0x50u) == 0x40800000u,
+                "FMOV-Fallback zeigt dem allgemeinen Observer veraltete GPRs oder verliert seine Registermutation.");
+    }
+
+    {
+        auto optimized = std::make_unique<katana_generated::CpuState>();
+        auto conservative = std::make_unique<katana_generated::CpuState>();
+        prepare_fmov_cache_fixture(*optimized, 0u);
+        prepare_fmov_cache_fixture(*conservative, 0u);
+        GeneratedFpuServices optimized_services(*optimized);
+        GeneratedFpuServices conservative_services(*conservative);
+        std::array<bool, 2> updated_address{};
+        const auto attach_provider = [&](auto& cpu, auto& services, const std::size_t index) {
+            auto* state = &cpu;
+            services.on_consume_cycles = [state, index, &updated_address] {
+                if (updated_address[index]) return;
+                require(state->r[8] == 0x50u && state->r[4] == 0x38u,
+                        "FMOV-Cycleprovider sieht veraltete lokalisierte Register.");
+                state->r[8] = 0x54u;
+                updated_address[index] = true;
+            };
+        };
+        attach_provider(*optimized, optimized_services, 0u);
+        attach_provider(*conservative, conservative_services, 1u);
+        optimized->pc = conservative->pc = 0x200u;
+        run_fmov_cache_fixture(*optimized, [&](auto& cpu) {
+            katana_fpu_cache_optimized::fn_00000200_with_services(cpu, &optimized_services);
+        });
+        run_fmov_cache_fixture(*conservative, [&](auto& cpu) {
+            katana_fpu_cache_conservative::fn_00000200_with_services(cpu, &conservative_services);
+        });
+        require(same_fmov_cache_architecture(*optimized, *conservative) &&
+                    updated_address[0] && updated_address[1] &&
+                    optimized->memory.read_u32(0x50u) == 0u &&
+                    optimized->memory.read_u32(0x54u) == 0x40800000u,
+                "FMOV verwendet nach dem Cycleprovider eine veraltete Storeadresse.");
     }
 
     {

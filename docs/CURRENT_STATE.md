@@ -1,6 +1,6 @@
 # Aktueller Projektstand
 
-Stand: 9. September 2026, r322-Matrix und sechs gezielte r325-Laeufe abgeschlossen. Historische Runs und
+Stand: 9. September 2026, r322-Matrix und gezielte r325/r326-Laeufe abgeschlossen. Historische Runs und
 Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
 Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
 
@@ -186,6 +186,30 @@ Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
   aktive Thread benoetigt im Mittel etwa 39,7--46,3 ms pro neuem Bild in den
   vier langsamen Szenen. Thread-Endpunktmessungen beweisen weder P95 noch die
   exklusive Simulationsarbeit. Amy Hot Shelter bleibt auf den Einstieg begrenzt.
+- r326 haelt die Adressregister bei den sechs FMOV-Speicherformen im nativen
+  Registercache. Observer-, Provider- und Fehlerpfade veroeffentlichen den
+  aktuellen Zustand weiterhin vor der Uebergabe. Normale Single-Float-
+  Vergleiche benoetigen keinen Wechsel der Host-FPU-Rundung mehr; Sonderwerte
+  und Double-Float behalten den bisherigen Pfad. Vier gezielte Komponenten-
+  und generierte Native-Tests bestehen, einschliesslich Teilzugriffsfehlern,
+  Delay-Slot-Ausnahmen und mutierenden Observer-/Provider-Callbacks.
+  Alle 249 Modulbindungen und 953.473 Dispatchentries bleiben unveraendert.
+- Sechs sichtbare r326-Gameplayfenster bestehen jeweils 60 Sekunden ohne
+  Capsule: Windy Valley 20,51; Emerald Coast 26,68; Sonic Twinkle Park 22,26;
+  Knuckles Lost World 21,41; Amy Twinkle Park 22,70; Amy Hot Shelter 29,24
+  Sim-FPS. Die Praesentation liegt bei 134--138 FPS. Zwei gezielte Kontrollen
+  mit r325 und zwei mit r326 zeigen erhebliche Streuung: Windy Valley erreicht
+  mit derselben r326-EXE auch 23,39 Sim-FPS. Emerald Coast bleibt in den
+  r326-Messungen langsamer als r325. Ein allgemeiner oder stabiler Gewinn ist
+  nicht belegt; 30-Hz-Leistungspuffer und Amys spaeter Abschnitt bleiben offen.
+  Diese Debugfenster ersetzen weder Storytests noch das strikte Produktgate.
+- Die geaenderte AOT-Semantik von r326 erfordert 1.086 AOT-Neukompilierungen.
+  Der gesamte Wrapper dauert 44 Minuten 30 Sekunden; davon entfallen
+  38 Minuten 40 Sekunden auf den Hostbuild. Der Lauf verwendet vorhandene
+  Analyseartefakte und ist kein sauberer Kaltnachweis. Das Zehn-Minuten-Ziel
+  bleibt deutlich verfehlt. Eine isolierte Compileanalyse ordnet etwa 95
+  Prozent der Compilerzeit dem Backend zu; Headerverarbeitung ist in dieser
+  Probe kein grosser Hebel. Das ist ein Compilerbefund, kein Produktgewinn.
 - Sky Chase, Chao Garden und weitere noch nicht erreichte Storyfortsetzungen
   sind nicht pauschal freigegeben. Ein neuer unbekannter Block endet weiterhin
   fail-closed; ein fehlender Crashrecord ist kein Beweis fuer Fehlerfreiheit.

@@ -9,11 +9,16 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <span>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace {
 
 constexpr std::uint32_t base_address = 0x100u;
+constexpr std::uint32_t fmov_cache_fixture_address = 0x200u;
+constexpr std::uint32_t fmov_delay_fixture_address = 0x222u;
 constexpr std::array<std::uint8_t, 54> fixture = {
     0x9Du, 0xF0u, 0x9Du, 0xF1u, 0x00u, 0xF1u, 0x02u, 0xF1u, 0x0Du, 0xF2u, 0x1Du,
     0xF3u, 0x0Bu, 0x00u, 0x09u, 0x00u, 0xFDu, 0xFBu, 0xFDu, 0xF3u, 0x0Bu, 0x00u,
@@ -87,8 +92,63 @@ std::vector<katana::ir::Function> build_program() {
     return katana::ir::lower_program(lines, functions);
 }
 
+std::vector<katana::ir::Function> build_fmov_cache_program() {
+    // This is the small Sonic-like native-register-cache witness.  Integer
+    // address mutations precede all six FMOV memory forms; the final FMOV is
+    // in the RTS delay slot so the same fixture also exercises delayed FPU
+    // guards.  All addresses stay in the low linear-RAM test window.
+    constexpr std::array<std::uint8_t, 34> fmov_cache_fixture = {
+        0x20u, 0xE2u, // MOV #0x20,R2
+        0x04u, 0xE0u, // MOV #4,R0
+        0x30u, 0xE4u, // MOV #0x30,R4
+        0x40u, 0xE6u, // MOV #0x40,R6
+        0x50u, 0xE8u, // MOV #0x50,R8
+        0x60u, 0xEAu, // MOV #0x60,R10
+        0x70u, 0xECu, // MOV #0x70,R12
+        0x04u, 0x70u, // ADD #4,R0
+        0x04u, 0x74u, // ADD #4,R4
+        0x28u, 0xF0u, // FMOV.S @R2,FR0
+        0x49u, 0xF2u, // FMOV.S @R4+,FR2
+        0x66u, 0xF4u, // FMOV.S @(R0,R6),FR4
+        0x6Au, 0xF8u, // FMOV.S FR6,@R8
+        0x8Bu, 0xFAu, // FMOV.S FR8,@-R10
+        0xA7u, 0xFCu, // FMOV.S FR10,@(R0,R12)
+        0x0Bu, 0x00u, // RTS
+        0x28u, 0xFCu  // delay: FMOV.S @R2,FR12
+    };
+    constexpr std::array<std::uint8_t, 8> fmov_delay_fixture = {
+        0x1Cu, 0xE2u, // MOV #0x1C,R2
+        0x04u, 0x72u, // ADD #4,R2
+        0x0Bu, 0x00u, // RTS
+        0x28u, 0xF6u  // delay: FMOV.S @R2,FR6
+    };
+    std::vector<std::uint8_t> bytes(fmov_cache_fixture.begin(), fmov_cache_fixture.end());
+    bytes.insert(bytes.end(), fmov_delay_fixture.begin(), fmov_delay_fixture.end());
+    const auto lines = katana::sh4::disassemble(bytes, fmov_cache_fixture_address);
+    constexpr std::array<std::uint32_t, 2> seeds = {
+        fmov_cache_fixture_address, fmov_delay_fixture_address};
+    const auto functions = katana::analysis::discover_functions(lines, seeds);
+    // Keep the decoder's Unknown region: the product fast path proves the
+    // effective RAM address at runtime, including its observer and mapping
+    // generation. A synthetic NormalRam proof would select a different path.
+    return katana::ir::lower_program(lines, functions);
+}
+
+std::string emit_cache_variant(
+    const std::span<const katana::ir::Function> program,
+    const bool localize_registers,
+    const std::string_view symbol_namespace) {
+    katana::codegen::BackendRequest request{program, fmov_cache_fixture_address};
+    request.symbol_namespace = symbol_namespace;
+    request.single_block_execution = true;
+    request.guarded_local_block_chaining = true;
+    request.conservative_register_localization = localize_registers;
+    return katana::codegen::CppBackend{}.emit(request).joined_text();
+}
+
 int emit_fixture(const std::string& output_path) {
     const auto program = build_program();
+    const auto cache_program = build_fmov_cache_program();
     auto source = katana::codegen::emit_cpp_program(program, base_address);
     // The observer contract forces the independent, per-instruction emission
     // path. Execute it against the optimized path for arithmetic/trap/PC parity.
@@ -97,6 +157,14 @@ int emit_fixture(const std::string& output_path) {
     reference.symbol_namespace = "katana_fpu_boundary_reference";
     reference.external_instruction_observer = true;
     source += katana::codegen::CppBackend{}.emit(reference).joined_text();
+    source += emit_cache_variant(
+        std::span<const katana::ir::Function>{cache_program},
+        true,
+        "katana_fpu_cache_optimized");
+    source += emit_cache_variant(
+        std::span<const katana::ir::Function>{cache_program},
+        false,
+        "katana_fpu_cache_conservative");
     std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
     output.write(source.data(), static_cast<std::streamsize>(source.size()));
     return output ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -131,6 +199,13 @@ int main(const int argc, char* argv[]) {
             "FIPR wird nicht dekodiert.");
     require(katana::sh4::decode(0xF9FDu).kind == InstructionKind::Ftrv,
             "FTRV wird nicht dekodiert.");
+    require(katana::sh4::decode(0xF028u).kind == InstructionKind::FmovLoad &&
+                katana::sh4::decode(0xF249u).kind == InstructionKind::FmovLoadPostIncrement &&
+                katana::sh4::decode(0xF466u).kind == InstructionKind::FmovLoadR0Indexed &&
+                katana::sh4::decode(0xF86Au).kind == InstructionKind::FmovStore &&
+                katana::sh4::decode(0xFA8Bu).kind == InstructionKind::FmovStorePreDecrement &&
+                katana::sh4::decode(0xFCA7u).kind == InstructionKind::FmovStoreR0Indexed,
+            "Die sechs FMOV-Memoryformen der Cachefixture werden falsch dekodiert.");
     for (std::uint16_t index = 0u; index < 16u; ++index) {
         require(katana::sh4::decode(static_cast<std::uint16_t>((index << 8u) | 0x0083u)).kind ==
                     InstructionKind::Prefetch,
@@ -138,6 +213,7 @@ int main(const int argc, char* argv[]) {
     }
 
     const auto program = build_program();
+    const auto cache_program = build_fmov_cache_program();
     const auto source = katana::codegen::emit_cpp_program(program, base_address);
     require(source.find("katana::runtime::fpu_binary") != std::string::npos &&
                 source.find("cpu.toggle_fpu_register_bank()") != std::string::npos &&
@@ -145,6 +221,29 @@ int main(const int argc, char* argv[]) {
                 source.find("raise_fpu_disabled") != std::string::npos &&
                 source.find("services->prefetch") != std::string::npos,
             "FPU-IR erreicht den Runtime-basierten C++-Emitter nicht vollstaendig.");
+
+    const auto cache_optimized_source = emit_cache_variant(
+        std::span<const katana::ir::Function>{cache_program},
+        true,
+        "katana_fpu_cache_optimized");
+    const auto cache_conservative_source = emit_cache_variant(
+        std::span<const katana::ir::Function>{cache_program},
+        false,
+        "katana_fpu_cache_conservative");
+    const auto delay_body = cache_optimized_source.rfind("fn_00000222_with_services");
+    const auto delay_body_end = cache_optimized_source.find("\n}\n", delay_body);
+    require(cache_optimized_source.find("katana::runtime::NativeAotRegisterFile<") !=
+                std::string::npos &&
+                cache_conservative_source.find("katana::runtime::NativeAotRegisterFile<") ==
+                    std::string::npos &&
+                cache_optimized_source.find("fn_00000200_with_services") !=
+                    std::string::npos &&
+                cache_optimized_source.find("const std::uint32_t address = katana_registers[2];") !=
+                    std::string::npos &&
+                delay_body != std::string::npos && delay_body_end != std::string::npos &&
+                cache_optimized_source.find("katana::runtime::NativeAotRegisterFile<",
+                                            delay_body) < delay_body_end,
+            "FMOV-Cachefixture erzeugt keinen getrennten lokalisierten und konservativen Emitterpfad.");
 
     std::cout << "FPU-Decoder-, IR- und Codegen-Pipeline erfolgreich.\n";
     return EXIT_SUCCESS;

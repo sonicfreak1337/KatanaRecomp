@@ -1150,11 +1150,9 @@ int main() {
         "laedt Register ohne vorherigen Flush neu.");
 
     // Emerald Coast's NINJA fog-table builders use FMOV.S stores in branch
-    // delay slots.  The FPU instruction must temporarily release localized
-    // GPRs because its raw body reads cpu.r[], but ordinary RAM does not raise
-    // the deferred MMIO flag.  Reacquire before publishing the branch target;
-    // otherwise the next loop block mutates a released cache whose destructor
-    // and later instruction boundaries can no longer flush those mutations.
+    // delay slots. Direct RAM now retains the GPR cache; the body must use its
+    // address registers and keep the deferred MMIO boundary. A provider/fault
+    // still releases the cache, while the following normal block keeps ownership.
     constexpr std::array<std::uint8_t, 12> delay_fmov_store_bytes = {
         0x01u,
         0xA0u, // BRA +1
@@ -1188,35 +1186,26 @@ int main() {
                                              .joined_text();
     const auto delay_fmov_store_instruction =
         emitted_instruction(delay_fmov_store_source, "0x8C021002u");
-    const auto delay_fmov_store_release = delay_fmov_store_instruction.find(
-        "katana_registers.flush_release();");
     const auto delay_fmov_store_write = delay_fmov_store_instruction.find(
-        "const std::uint32_t address = cpu.r[0] + cpu.r[4];",
-        delay_fmov_store_release);
+        "const std::uint32_t address = cpu.r[0] + katana_registers[4];");
     const auto delay_fmov_store_defer = delay_fmov_store_instruction.find(
         "katana_deferred_safepoint_8C021002 = ", delay_fmov_store_write);
-    const auto delay_fmov_store_reacquire = delay_fmov_store_instruction.find(
-        "katana_registers.reload_acquire();", delay_fmov_store_defer);
     const auto delay_fmov_store_target = delay_fmov_store_source.find(
         "cpu.pc = katana::runtime::relocate_code_address_inline(0x8C021006u);",
-        delay_fmov_store_reacquire);
+        delay_fmov_store_source.find("katana_deferred_safepoint_8C021002 = "));
     require(
-        delay_fmov_store_release != std::string_view::npos &&
-            delay_fmov_store_write != std::string_view::npos &&
+        delay_fmov_store_write != std::string_view::npos &&
             delay_fmov_store_defer != std::string_view::npos &&
-            delay_fmov_store_reacquire != std::string_view::npos &&
             delay_fmov_store_target != std::string::npos &&
-            delay_fmov_store_release < delay_fmov_store_write &&
             delay_fmov_store_write < delay_fmov_store_defer &&
-            delay_fmov_store_defer < delay_fmov_store_reacquire &&
-            delay_fmov_store_reacquire < delay_fmov_store_target,
-        "Ein FPU-Memory-Store im Delay Slot betritt den Folgeblock mit "
-        "freigegebenem lokalisiertem GPR-Satz.");
+            delay_fmov_store_instruction.find(" + cpu.r[4];") ==
+                std::string_view::npos,
+        "Ein FPU-Memory-Store im Delay Slot verliert die lokalisierten "
+        "Adressregister oder seine verzogerte MMIO-Grenze.");
 
     // Sonic Story reaches the complementary form: a conditional delayed
-    // branch whose FMOV.S load releases localized GPRs.  Normal RAM keeps the
-    // deferred MMIO flag clear, so the cache must still be reacquired before
-    // either the taken or fallthrough successor can observe it.
+    // branch whose FMOV.S load must likewise retain the cache for normal RAM,
+    // while preserving the original taken/fallthrough and MMIO boundaries.
     constexpr std::array<std::uint8_t, 14> delay_fmov_load_bytes = {
         0x00u,
         0x88u, // CMP/EQ #0,R0
@@ -1252,29 +1241,22 @@ int main() {
                                             .joined_text();
     const auto delay_fmov_load_instruction =
         emitted_instruction(delay_fmov_load_source, "0x8C021104u");
-    const auto delay_fmov_load_release = delay_fmov_load_instruction.find(
-        "katana_registers.flush_release();");
     const auto delay_fmov_load_read = delay_fmov_load_instruction.find(
-        "const std::uint32_t address = cpu.r[1];", delay_fmov_load_release);
+        "const std::uint32_t address = katana_registers[1];");
     const auto delay_fmov_load_defer = delay_fmov_load_instruction.find(
         "katana_deferred_safepoint_8C021104 = ", delay_fmov_load_read);
-    const auto delay_fmov_load_reacquire = delay_fmov_load_instruction.find(
-        "katana_registers.reload_acquire();", delay_fmov_load_defer);
     const auto delay_fmov_load_target = delay_fmov_load_source.find(
         "cpu.pc = take_branch ? katana::runtime::relocate_code_address_inline(0x8C021108u) : katana::runtime::relocate_code_address_inline(0x8C021106u);",
-        delay_fmov_load_reacquire);
+        delay_fmov_load_source.find("katana_deferred_safepoint_8C021104 = "));
     require(
-        delay_fmov_load_release != std::string_view::npos &&
-            delay_fmov_load_read != std::string_view::npos &&
+        delay_fmov_load_read != std::string_view::npos &&
             delay_fmov_load_defer != std::string_view::npos &&
-            delay_fmov_load_reacquire != std::string_view::npos &&
             delay_fmov_load_target != std::string::npos &&
-            delay_fmov_load_release < delay_fmov_load_read &&
             delay_fmov_load_read < delay_fmov_load_defer &&
-            delay_fmov_load_defer < delay_fmov_load_reacquire &&
-            delay_fmov_load_reacquire < delay_fmov_load_target,
-        "Ein FPU-Memory-Load im bedingten Delay Slot betritt einen Nachfolger "
-        "mit freigegebenem lokalisiertem GPR-Satz.");
+            delay_fmov_load_instruction.find("const std::uint32_t address = cpu.r[") ==
+                std::string_view::npos,
+        "Ein FPU-Memory-Load im bedingten Delay Slot verliert die lokalisierten "
+        "Adressregister oder seine verzogerte MMIO-Grenze.");
 
     katana::codegen::BackendRequest proven_delay_request{
         proven_delay_memory_program, 0x8C020000u};

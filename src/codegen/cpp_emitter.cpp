@@ -1168,13 +1168,15 @@ void emit_terminal_instruction_completion(std::ostringstream& output,
 void emit_fpu_disabled_guard(std::ostringstream& output,
                              const katana::ir::Instruction& instruction,
                              const int indent,
-                             const bool single_block) {
+                             const bool single_block,
+                             const NativeRegisterEmission& registers = {}) {
     if (!is_fpu_operation(instruction)) {
         return;
     }
 
     emit_indent(output, indent);
     output << "if ((cpu.sr & katana::runtime::sr_fd_mask) != 0u) {\n";
+    emit_register_flush_release(output, indent + 1, registers);
     emit_indent(output, indent + 1);
     output << "raise_fpu_disabled(cpu, " << relocated_code_address(instruction.source_address);
     if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
@@ -1192,7 +1194,8 @@ void emit_fpu_disabled_guard(std::ostringstream& output,
 void emit_fpu_mode_guard(std::ostringstream& output,
                          const katana::ir::Instruction& instruction,
                          const int indent,
-                         const bool single_block) {
+                         const bool single_block,
+                         const NativeRegisterEmission& registers = {}) {
     using Operation = katana::ir::Operation;
 
     std::string invalid_condition;
@@ -1286,6 +1289,7 @@ void emit_fpu_mode_guard(std::ostringstream& output,
 
     emit_indent(output, indent);
     output << "if (" << invalid_condition << ") {\n";
+    emit_register_flush_release(output, indent + 1, registers);
     emit_indent(output, indent + 1);
     output << "raise_illegal_instruction(cpu, "
            << relocated_code_address(instruction.source_address);
@@ -2867,9 +2871,20 @@ bool guarded_linear_access_keeps_native_registers(
     const bool external_instruction_observer) noexcept {
     using Operation = katana::ir::Operation;
 
+    // FMOV transfers touch FR/XF and their explicit address GPRs only. The
+    // localized body uses the cache for those GPRs; the ordinary memory helpers
+    // retain their observer/fault boundary. FD and illegal-mode exits flush the
+    // cache before exception entry, just as the conservative path does.
+    const bool fpu_memory_transfer =
+        instruction.operation == Operation::FmovLoad ||
+        instruction.operation == Operation::FmovLoadPostIncrement ||
+        instruction.operation == Operation::FmovLoadR0Indexed ||
+        instruction.operation == Operation::FmovStore ||
+        instruction.operation == Operation::FmovStorePreDecrement ||
+        instruction.operation == Operation::FmovStoreR0Indexed;
     if (external_instruction_observer || instruction.is_privileged ||
         instruction.operation == Operation::Unknown ||
-        is_fpu_operation(instruction) ||
+        (is_fpu_operation(instruction) && !fpu_memory_transfer) ||
         requires_post_instruction_architectural_safepoint(instruction) ||
         !detail::native_aot_has_guarded_linear_ram_access(instruction))
         return false;
@@ -3151,6 +3166,8 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
           guarded_linear_access_keeps_native_registers(
               instruction, external_instruction_observer));
     const NativeRegisterEmission unlocalized_registers;
+    const bool localized_fpu_memory = registers.enabled() &&
+        !register_boundary && is_fpu_operation(instruction) && may_raise_memory_error;
     emit_indent(output, indent);
     output << "{\n";
     emit_indent(output, indent);
@@ -3170,8 +3187,17 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
                    << " && services != nullptr) ";
         else
             output << "if (services != nullptr) ";
-        output <<
-                  "katana::runtime::flush_pending_guest_cycles(cpu, *services);\n";
+        if (localized_fpu_memory) {
+            output << "{\n";
+            emit_register_flush_release(output, indent + 2, registers);
+            emit_indent(output, indent + 2);
+            output << "katana::runtime::flush_pending_guest_cycles(cpu, *services);\n";
+            emit_register_reload_acquire(output, indent + 2, registers);
+            emit_indent(output, indent + 1);
+            output << "}\n";
+        } else {
+            output << "katana::runtime::flush_pending_guest_cycles(cpu, *services);\n";
+        }
     }
     if (track_mmio_boundary) {
         emit_indent(output, indent + 1);
@@ -3206,8 +3232,10 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
            << ", "
            << timing.guest_cycles << "u);\n";
     emit_privileged_guard(output, instruction, indent + 1, single_block);
-    emit_fpu_disabled_guard(output, instruction, indent + 1, single_block);
-    emit_fpu_mode_guard(output, instruction, indent + 1, single_block);
+    emit_fpu_disabled_guard(output, instruction, indent + 1, single_block,
+                            register_boundary ? unlocalized_registers : registers);
+    emit_fpu_mode_guard(output, instruction, indent + 1, single_block,
+                        register_boundary ? unlocalized_registers : registers);
 
     // PREF is address-dependent: outside the store-queue window it is only a cache hint, while
     // inside that window it performs a translated 32-byte transfer and can raise the same MMU,
@@ -3300,6 +3328,8 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
         registers);
     emit_indent(output, indent + 1);
     output << "} catch (const katana::runtime::MemoryAccessError& error) {\n";
+    if (localized_fpu_memory)
+        emit_register_flush_release(output, indent + 2, registers);
     emit_indent(output, indent + 2);
     output << "enter_memory_exception_with_provenance(cpu, error, "
            << relocated_code_address(instruction.source_address);

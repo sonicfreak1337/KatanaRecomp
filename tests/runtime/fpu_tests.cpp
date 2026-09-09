@@ -247,7 +247,70 @@ void test_dispatched_vector_arithmetic() {
     }
 }
 
+void test_single_comparison_truth_table() {
+    using namespace katana::runtime;
+    struct Case {
+        std::uint32_t n;
+        std::uint32_t m;
+        bool equal_dn0;
+        bool greater_dn0;
+        bool equal_dn1;
+        bool greater_dn1;
+    };
+    constexpr std::array cases{
+        Case{0x3F800000u, 0x3F800000u, true, false, true, false},
+        Case{0x40000000u, 0x3F800000u, false, true, false, true},
+        Case{0x3F800000u, 0x40000000u, false, false, false, false},
+        Case{0xBF800000u, 0xC0000000u, false, true, false, true},
+        Case{0xC0000000u, 0xBF800000u, false, false, false, false},
+        Case{0xBF800000u, 0xBF800000u, true, false, true, false},
+        Case{0x3F800000u, 0xBF800000u, false, true, false, true},
+        Case{0xBF800000u, 0x3F800000u, false, false, false, false},
+        Case{0u, 0x80000000u, true, false, true, false},
+        Case{0x80000000u, 0u, true, false, true, false},
+        Case{0x80000000u, 0x80000000u, true, false, true, false},
+        Case{0u, 0xBF800000u, false, true, false, true},
+        Case{0xBF800000u, 0u, false, false, false, false},
+        Case{0x00800000u, 0x80000000u, false, true, false, true},
+        Case{0x80000000u, 0x00800000u, false, false, false, false},
+        Case{0x7F7FFFFFu, 0x00800000u, false, true, false, true},
+        Case{0x7F800000u, 0x7F800000u, true, false, true, false},
+        Case{0x7F800000u, 0x7F7FFFFFu, false, true, false, true},
+        Case{0xFF800000u, 0u, false, false, false, false},
+        Case{0x7FC00001u, 0x3F800000u, false, false, false, false},
+        Case{0x3F800000u, 0x7FBFFFFFu, false, false, false, false},
+        Case{1u, 0u, false, true, true, false},
+        Case{0x80000001u, 0u, false, false, true, false},
+        Case{0u, 0x80000001u, false, true, true, false},
+        Case{0x007FFFFFu, 0x00800000u, false, false, false, false}};
+    for (const auto& entry : cases) {
+        for (const auto mode : {0u, 1u, fpscr_dn_mask, fpscr_dn_mask | 1u}) {
+            for (const bool greater : {false, true}) {
+                CpuState cpu;
+                cpu.fr[3] = entry.n;
+                cpu.fr[6] = entry.m;
+                const auto before = cpu.fr;
+                cpu.fpscr = mode | fpscr_cause_mask | fpscr_flag_mask;
+                const auto expected_fpscr = cpu.fpscr & ~fpscr_cause_mask;
+                const auto exception_generation = cpu.exception_generation;
+                const bool dn = (mode & fpscr_dn_mask) != 0u;
+                const bool expected = greater
+                    ? (dn ? entry.greater_dn1 : entry.greater_dn0)
+                    : (dn ? entry.equal_dn1 : entry.equal_dn0);
+                cpu.t = !expected;
+                if (greater) fpu_compare_greater(cpu, 6u, 3u);
+                else fpu_compare_equal(cpu, 6u, 3u);
+                require(cpu.t == expected && cpu.fr == before &&
+                            cpu.fpscr == expected_fpscr &&
+                            cpu.exception_generation == exception_generation,
+                        "Single comparison changed truth table, operands, causes or flags.");
+            }
+        }
+    }
+}
+
 int main() {
+    test_single_comparison_truth_table();
     test_dispatched_vector_arithmetic();
     using namespace katana::runtime;
     test_precise_arithmetic();
