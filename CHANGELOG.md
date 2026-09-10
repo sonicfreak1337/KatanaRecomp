@@ -4,6 +4,18 @@
 
 ### Geaendert
 
+- r342/0.49.8 schliesst eine SDK-Registry-Leckquelle beim Ueberschreiben
+  authentifizierter Texturtraeger: die SDK-Referenzen werden vor den neuen
+  Bytes transaktional freigegeben. PVM-Lookup-Aliasse zaehlen nicht als
+  weitere Freigaberechte. Erfolgreiche SDK-Texturauswahl aktualisiert nun
+  auch den nativen Indexschatten des Chao-Pfads; begrenzte Fehlerkapseldaten
+  erfassen verbleibende Descriptor-/Auswahlfehler. SDK Basic verwendet seine
+  eigenen PCW/TSP/ARC1- und Materialzustaende statt des TitleBasic-Vertrags.
+  Acht Packet- und neun Farb-Komponentenfaelle, Adapter-Syntaxpruefung und
+  Linkaudit bestehen. Mikrobuild 81.635 ms, 1 Adapter, 0 AOT-Compiles;
+  Analyse und Pack bleiben erhalten. Crashreplays und sichtbarer Dash-Effekt
+  sind noch nicht im Spiel bestaetigt; Nutzer uebernimmt die Tests.
+
 - r341/0.49.8 repariert den neuen Chao-Texture-Flagstop, die unnoetige
   Normalenvalidierung unbeleuchteter Final-Egg-Effekte und den SDK-Farbpfad
   des Light Speed Dash. Originale SDK-Lichtvorbereitung und TA-Farbquantisierung

@@ -1,5 +1,39 @@
 # Aktueller Projektstand
 
+Stand: 10. September 2026, r342/0.49.8 inkrementell exportiert.
+Der Nutzer hat den r341-Batch mit "batch vollstaendig" geschlossen.
+Der Sonic-Crash zeigt eine volle SDK-Registry mit 2.048 belegten Eintraegen.
+Eine konkrete Leckquelle ist behoben: authentifizierte Texturtraeger geben
+beim Ueberschreiben ihre SDK-Referenzen transaktional frei, bevor die neuen
+Bytes geschrieben werden. Reine PVM-Lookup-Aliasse erhalten keine zusaetzlichen
+Freigaberechte. Andere moegliche Registry-Leckquellen sind damit nicht bewiesen
+geschlossen. Der Chao-Pfad uebergibt erfolgreiche SDK-Texturauswahl nun an den
+nativen Indexschatten, statt nur Auswahlfehler zu beobachten. Die Kapsel belegt
+nicht abschliessend, dass dies den gemeldeten Crash verursacht hat; begrenzte
+SATP-v1-Daten erfassen einen verbleibenden Fehler ohne Draw-Unterdrueckung.
+
+SDK Basic 6214FA verwendet seine eigenen Live-PCW/ISP/TSP-Worte, den originalen
+ARC1-Vertrag, Materialzustand und dynamischen ARC1-Cache. Per-Mesh-Fog folgt
+seinem Packet. Andere Renderer-Owner behalten ihre Vertraege. Der r341-Witness
+zeigte bereits aktive Float-Farben bei weiterhin falschem Dash; die neue
+Packet-Korrektur ist daher noch keine bestaetigte visuelle Reparatur.
+Acht Packet- und neun Farb-Komponentenfaelle, Carrier-Quell-/Kapselaudit und
+Adapter-Syntaxpruefung bestehen. Keine eigenen Spielstarts; der Nutzer testet.
+
+Mikrobuild 81.635 ms im Produkthelfer einschliesslich Retained-Validierung/Kopie,
+ohne vorgelagerten Runtime-Refresh. Genau 1 Adapter-Compile, 0 AOT-Compiles,
+Linkaudit bestanden. Generierte Quellen und Pack bleiben bytegleich zu r341.
+Version bleibt 0.49.8: Tails, Big, Amy, Gamma und Knuckles durchgespielt;
+Sonic und Super Sonic offen. Beide neuen Crashpunkte und der Dash-Effekt
+brauchen noch die Bestaetigung im Spiel.
+EXE SHA-256: `88a632da5aab4bc7d24de60a3d94cc8165e166c455d3b407c33ff4b1b1e28eba`.
+Packdatei SHA-256: `3ccc5a45aeef59a4c58e05e686a0548273ec9f8fed194b3aca84213dd87211f3`.
+Evidence: `private/diagnostics/r342-dash-followup-20260910a/review.md`
+und `microbuild/build-result.json`. Private Adapteraenderungen liegen ausserhalb
+des oeffentlichen Git-Repositories; der lokale Commit dokumentiert ihre Evidence.
+
+## Vorheriger Export r341
+
 Stand: 10. September 2026, r341/0.49.8 inkrementell exportiert.
 Der Nutzer hat den r340-Batch geschlossen und den Build ausdruecklich gestartet.
 Chao: die native Texture-Pruefung akzeptiert nun die originale gefuellte

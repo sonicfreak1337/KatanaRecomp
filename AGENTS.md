@@ -7,6 +7,16 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (9. September 2026)
 
+- Am 10. September schliesst der Nutzer den r341-Batch mit "batch vollstaendig".
+  r342/0.49.8 ist inkrementell exportiert: 1 Adapter, 0 AOT-Dateien,
+  81.635 ms im Produkthelfer, unveraenderter Pack, Linkaudit bestanden.
+  Enthalten: SDK-Referenzfreigabe vor authentifiziertem Carrier-Overwrite,
+  erfolgreiche SDK-Texturauswahl im nativen Chao-Indexschatten und korrekte
+  SDK-Basic-PCW/TSP/ARC1-Zustaende fuer den Dash-Pfad. Beide Crashreplays
+  und der sichtbare Dash-Effekt sind noch nicht im Spiel bestaetigt.
+  Der Nutzer testet selbst; keine eigenen Spielstarts. Lokal committen,
+  nicht pushen. Keine neuen Exporte waehrend seiner naechsten Batchsammlung.
+
 - Am 10. September schliesst der Nutzer den r340-Batch mit neuem Sonic-
   und Chao-Crash sowie weiterhin falschem Light-Speed-Dash-Effekt. Auf
   "ok build jetzt" wurde r341/0.49.8 als Mikrobuild exportiert: 1 Adapter,
