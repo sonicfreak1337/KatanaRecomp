@@ -7,6 +7,15 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (9. September 2026)
 
+- Am 10. September schliesst der Nutzer r343 nach dem einzigen neuen Crash
+  nach Final Egg. r344/0.49.8 ist als Mikrobuild exportiert: 88.429 ms im
+  Buildhelfer, ca. 96 Sekunden gesamter warmer Aufruf, 1 Adapter, 0 AOT-
+  Compiles, Pack bytegleich und Linkaudit bestanden. Enthalten sind der
+  quellbelegte SDK-Null-Release-No-op und begrenzte Emblem-Listendiagnostik.
+  Light Speed Dash wurde in r343 vom Nutzer bestaetigt. Neue Chao-Roots
+  bleiben im spaeteren AOT-Batch. Nutzer uebernimmt Spieltests; keine eigenen
+  Starts. Nach diesem Produktbuild lokal committen, nicht pushen.
+
 - Am 10. September priorisiert der Nutzer erneut "Sonic ist der Test" und
   einen schnellen Build. r343/0.49.8 ist daraufhin als Mikrobuild mit Story-
   Freigabe- und Dash-Materialfix exportiert: 84.207 ms, 1 Adapter, 0 AOT-

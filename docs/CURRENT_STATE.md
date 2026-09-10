@@ -1,10 +1,51 @@
 # Aktueller Projektstand
 
+Stand: 10. September 2026, r344/0.49.8 inkrementell exportiert.
+Der Nutzer hat den Batch nach dem einzigen neuen Sonic-Crash geschlossen.
+1 Adapter, 0 AOT-Compiles; 88.429 ms im Buildhelfer. Der gesamte Aufruf dauert
+laut Log-Dateizeiten etwa 96 Sekunden (Warmbuild, keine Kaltpfadmessung).
+Linkaudit bestanden, AOT-Pack und generierte Quellen bytegleich zu r343.
+
+Der neue Stop nach Final Egg betrifft die Emblem-Aufraeumroutine: eine von
+zwei TEXNAME-Referenzen ist null. Der SDK-Release reproduziert jetzt den
+quellgebundenen Original-/Flycast-ROM-Pfad als erfolgreichen No-op, waehrend
+gueltige Zeilen weiterhin geordnet freigegeben werden. Ungueltige Nicht-Null-
+Zeiger bleiben vor Mutation abgewiesen. Vollstaendig leere Listen brauchen
+keine Registry. SRLS/SRLJ/SRLP liefern Nullanzahl, genaue Ablehnungsstelle und
+begrenzte Descriptor-/SDK-Fehlerdaten vor einer Freigabe. Die Ursache der
+unvollstaendigen Emblem-Ladung ist damit nicht behauptet geschlossen.
+
+Sieben Freigabe-Komponentengruppen, quellgebundene SDK-/BIOS-/Flycast-Pruefung,
+Adapter-Syntax und Produkt-Linkaudit bestehen. Der Dash-Fix wurde vom Nutzer
+in r343 bestaetigt. Kein Agenten-Spielstart; der r344-Storyuebergang ist noch
+nicht spielbestaetigt. Die 21 vorbereiteten Chao-Race-Roots bleiben ausserhalb
+dieses kleinen Sonic-Mikrobuilds. Version weiterhin 0.49.8.
+
+EXE SHA-256: `3a6f1ef614ee07d79f1079603338d9f9a465309d7651dd06dbc52893d0c251d0`.
+Pack SHA-256: `3ccc5a45aeef59a4c58e05e686a0548273ec9f8fed194b3aca84213dd87211f3`.
+Adapter SHA-256: `ab717909f9a5614b9164f968594458ba91fc2912784a12d24c947e3e259f9e11`.
+Freigabehelper SHA-256: `faea456d1d17888620359ccd912b2315c99212cadc338fc2b5a081bec83196a9`.
+Evidence: `private/diagnostics/r344-sdk-release-null-20260910a/` und
+`private/diagnostics/r344-final-egg-emblem-20260910a/`. Lokal committen, kein Push.
+
+## Vorheriger Export r343
+
 Stand: 10. September 2026, r343/0.49.8 als Sonic-Testbuild exportiert.
 Auf die erneute Anordnung "Sonic ist der Test" wurde der kleine Build vorgezogen:
 1 Adapter, 0 AOT-Compiles, 84.207 ms im Produkthelfer; Linkaudit bestanden.
 Analyse, generierte Quellen und AOT-Pack sind bytegleich zu r342. Kein Agenten-
-Spielstart; die Story-/Dash-Bestaetigung erfolgt durch den Nutzer.
+Spielstart. Der Nutzer bestaetigt den Light-Speed-Dash-Fix in r343 und
+meldet nach Final Egg einen neuen Stop in der Emblem-Aufraeumroutine
+(6087FC, TEXLIST 8C1C5398, frame 12028). Die zweite Texturreferenz ist null;
+die neue strikte Release-Vorpruefung weist sie ab. Die Kapsel enthaelt zuvor
+29 erfolgreiche SDK-Freigaben mit je einer freigegebenen Registry-Zeile.
+Der konkrete Folgeuebergang bleibt offen; keine erneute Registry-Erschoepfung
+ist fuer diesen Stop belegt.
+Der folgende Quellfix reproduziert den durch Original-BIOS und Flycast
+belegten Null-Eintrag als erfolgreichen No-op. Gueltige Eintraege bleiben
+geordnet freigegeben; ungueltige Nicht-Null-Zeiger werden weiter abgewiesen.
+Sieben Komponentengruppen, der Quellenabgleich und Adapter-Syntax bestehen.
+Noch kein Folgeexport oder Spieltest dieses Fixes.
 
 Der generische 6087FC-Freigabepfad fuehrt jetzt die kompilierte originale
 64DD00-Routine fuer jede TEXNAME-Referenz aus, statt fuer unbekannte native

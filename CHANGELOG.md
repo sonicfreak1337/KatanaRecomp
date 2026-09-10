@@ -4,6 +4,14 @@
 
 ### Geaendert
 
+- r344/0.49.8 korrigiert den Stop beim Aufraeumen der Emblem-Anzeige nach
+  Final Egg: Null-TEXNAME-Eintraege folgen dem belegten Original-/Flycast-
+  No-op; gueltige Referenzen werden regulaer freigegeben. Begrenzte
+  Diagnosedaten erhalten Nullindex, SDK-Fehlerwerte und Descriptorzustand.
+  Sieben Komponentengruppen, Quellenabgleich, Syntax- und Linkpruefung
+  bestehen. 88.429 ms Buildhelfer, 1 Adapter, 0 AOT-Compiles; Gameplay-
+  Bestaetigung offen. Light Speed Dash ist durch den r343-Nutzertest bestaetigt.
+
 - r343/0.49.8 ist der vorgezogene Sonic-Testbuild: generische SDK-TEXLIST-
   Freigabe ueber die originale kompilierte Routine statt pauschalem Fehler;
   korrekte Materialtabellen-Reads bei Zaehler null fuer alle Basic-Owner.
