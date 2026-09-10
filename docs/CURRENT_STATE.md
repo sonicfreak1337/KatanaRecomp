@@ -1,10 +1,12 @@
 # Aktueller Projektstand
 
-Stand: 10. September 2026, r333/0.49.5 inkrementell exportiert. Credits zeigen
-im sichtbaren Diagnosepfad wieder lesbare Namen/Rollen und die richtigen
-wechselnden Hintergrundbilder. Emerald Coast und Windy Valley bestehen
-je einen sichtbaren 60-Sekunden-Lauf mit Bewegung. Originaltiming, der
-vollstaendige Credits-Abschluss und die spaeten Storyuebergaenge bleiben offen.
+Stand: 10. September 2026, r335/0.49.5 inkrementell exportiert. Credits zeigen
+wieder lesbare Namen/Rollen und die richtigen wechselnden Hintergrundbilder.
+Die normale Framefamilie beruecksichtigt jetzt den aktiven Original-Videomodus
+und gemeinsam verbrauchte Completion-Slots. Emerald Coast und Windy Valley
+bestehen je einen sichtbaren 60-Sekunden-Lauf mit Bewegung. Nicht alle Timing-
+Owner, der vollstaendige Credits-Abschluss und spaete Storyuebergaenge sind
+damit abgenommen. Windy Valley hat weiterhin zu wenig CPU-Leistungspuffer.
 Die statische Delta-Nachpruefung bleibt eingeschraenkt. Historische Runs und
 Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
 Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
@@ -17,20 +19,60 @@ Kontrollfluss. NativeBringup bleibt nicht releasefaehig; ein funktionierender
 Teil des Spiels bedeutet keine vollstaendige Closure oder Releaseabnahme.
 
 Gleichrangige P0-Ziele sind erhaltener Story-/Gameplay-/Savefortschritt,
-korrektes Originaltempo mit stabiler aktuell auf 30 Hz konfigurierter Simulation,
+korrektes Originaltempo (einschliesslich stabiler 30 Updates/s im passenden
+60-Hz-Spielpfad und abweichender originaler Szenenkadenz),
 weniger CPU-Arbeit pro Titelupdate, unabhaengige 144-Hz-Praesentation, ein
 vollstaendiger Kaltexport unter zehn Minuten und kosteneffiziente Umsetzung.
 Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
 Die erneute Bytebindung belegt unterschiedliche originale Completion-Zahlen:
 Staffroll fordert einen VBlank-Slot, andere Pfade zwei. Der PAL-Konstruktor
 658500 waehlt das 625-Zeilen-Profil, die 525-Zeilen-Konstruktoren sind getrennt.
-Der aktuelle Host wendet unabhaengig davon seine festen 30 Hz an; das ist ein
-belegter Timingfehler. Seine Korrektur muss den aktiven Originalmodus und die
-tatsaechlichen Completion-Anforderungen erhalten. Der separate 604FF0-TMU-
-Pfad ist noch nicht ausreichend fuer eine Verhaltensaenderung geklaert.
+Der bisherige feste 30-Hz-Hosttakt war deshalb falsch. r334/r335 ergaenzen eine
+optionale native Titeluhr neben der unveraenderten AOT-Hostservices-ABI. Der
+gebundene frische PAL-Checkpoint beginnt mit 50 Hz; echte Mode-Apply-Pfade
+binden 50/60 Hz an die angewandten Videowerte, nicht an den Auswahlindex.
+Die 144-Hz-Ausgabe behaelt ihre eigene Uhr. Sondermodus 1 und der separate
+604FF0-TMU-Pfad bleiben bei ihrem bisherigen Verhalten und sind noch nicht
+ausreichend fuer eine Timingabnahme geklaert. `simulation_rate_hz=30` in der
+generischen Snapshot-Struktur bleibt ein Konfigurationswert, kein Messwert
+der titelgesteuerten Kadenz. Dazu dienen echte Frame-/Zeitdifferenzen.
 
 ## Belegter Fortschritt
 
+- r334 misst im sichtbaren Credits-Fenster 49,9994 Titelupdates/s bei
+  active_hz=50 und Release 1; die lesbare Schrift bleibt erhalten. Ein
+  90-s-Emerald-Coast-Diagnoselauf speichert einen Quicksave und laedt ihn
+  zweimal erfolgreich mit identischem RAM-Digest. Schema 5 speichert den
+  aktiven Videomodus; absolute Hostdeadlines werden nach Load neu aufgebaut.
+  Alte zulaessige Schemas 3/4 behalten ohne bekannten Modus den bisherigen
+  Hostpfad bis zum naechsten echten Mode-Apply. Keine geratenen Modewerte.
+  Derselbe Lauf findet aber eine neue gemischte Wait-Familie: Gameplay
+  konsumiert Release 2 teilweise in producer-wait, teilweise in frame-begin.
+  Der r334-Reset dazwischen addiert faelschlich Wartezeit nach CPU-Arbeit.
+  r334 ist daher keine allgemeine Timingabnahme.
+- r335 behebt genau diese Familie mit gemeinsamer absoluter Phase. Jeder
+  erfolgreich gepruefte originale Ready-Decrement wird einmal verbucht;
+  der normale Frame-Owner wartet den Rest oder den letzten bereits
+  verbrauchten Slot und praesentiert einmal ohne zusaetzlichen Hostwait.
+  Modewechsel, Load, generische Frames und ungebundene direkte Completions
+  invalidieren die Phase. Es werden keine Extra-Callbacks oder Updates erzeugt.
+  Drei neu kompilierte Einheiten, Hostbuild 47,19 s, CLI-Export 291,41 s;
+  Wrapper-Vorpruefungen kommen hinzu. Keine neu kompilierten AOT-unit-v-Dateien.
+  Produkt-SHA256: 109a299ab2cd85273c486ce789fd86aad6189357c27adc939a18eec7853e7886.
+  Zwei sichtbare 60-s-Laeufe mit Inputprofil 1 und ohne parallelen Build
+  bestehen ohne Capsule: Emerald Coast 24,55 Titelupdates/s / 141,12
+  Praesentationen/s / P95 53,28 ms; Windy Valley 21,86 / 139,68 / 63,72 ms.
+  Der beobachtete PAL-Gameplaypfad verlangt zwei 50-Hz-Slots, also 25 Updates/s.
+  Windy Valley erreicht auch diese Kadenz nicht stabil. Keine isolierte
+  CPU-Performanceverbesserung und keine stabile-30-/144-FPS-Abnahme.
+  Abschliessend besteht dasselbe r335-Binary einen sichtbaren 60-s-Quicksave-
+  Lauf: Save bei Frame 600, zwei erfolgreiche Loads mit identischem RAM-
+  Digest und weiterer Ausfuehrung; natives Zeitlimit, kein Forced Stop.
+  Eine separate sichtbare 30-s-Credits-Probe misst 50,0029 Updates/s im
+  stabilen Fenster und zeigt weiterhin lesbare Schrift und Bildwechsel.
+  Auch sie endet am nativen Zeitlimit. Der volle Abspann bleibt ungeprueft.
+  Private Belege: `r335-sonic-action-stages-shared-completion-cadence-20260910a`,
+  `r335-quicksave-roundtrip-20260910a`, `r335-credits-visible-20260910a`.
 - r333 bindet SUMMARYs eigenstaendige `staffroll_txt`-Textur an den exakten
   geladenen Modulbesitzer. Registrierte Live-PVM-Deskriptoren haben Vorrang
   vor Bootstrap-Snapshots; letztere muessen auch die originale GBIX erfuellen.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/runtime/native_port.hpp"
+#include "katana/runtime/native_port_title_cadence.hpp"
 
 #include <array>
 #include <atomic>
@@ -223,7 +224,8 @@ class NativePortTelemetry final {
 // present-wait timings belong to the backend owner and are intentionally not
 // inferred from this facade.
 // The wrapped host remains the owner of the window/backend.
-class NativePortTelemetryHostProxy final : public NativePortHostServices {
+class NativePortTelemetryHostProxy final : public NativePortHostServices,
+                                         public NativePortTitleCadenceHost {
   public:
     NativePortTelemetryHostProxy(NativePortHostServices& host,
                                  NativePortTelemetryWriter& writer) noexcept;
@@ -237,6 +239,9 @@ class NativePortTelemetryHostProxy final : public NativePortHostServices {
     void synchronize_simulation_boundary() override;
     void begin_frame(std::uint64_t frame_index) override;
     void present_frame(std::uint64_t frame_index) override;
+    [[nodiscard]] bool title_cadence_available() const noexcept override;
+    void wait_until_title_deadline(std::uint64_t deadline_nanoseconds) override;
+    void present_frame_after_title_cadence(std::uint64_t frame_index) override;
     [[nodiscard]] std::uint64_t presented_frames()
         const noexcept override;
 

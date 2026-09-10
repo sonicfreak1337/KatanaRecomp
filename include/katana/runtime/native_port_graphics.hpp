@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/runtime/native_port.hpp"
+#include "katana/runtime/native_port_title_cadence.hpp"
 
 #include <array>
 #include <cstddef>
@@ -1100,7 +1101,8 @@ class NativePortGraphicsDevice final {
 
 // Default desktop composition for generated native products. Future native
 // input services share this window boundary; Dreamcast Maple state never does.
-class NativePortDesktopHost final : public NativePortHostServices {
+class NativePortDesktopHost final : public NativePortHostServices,
+                                  public NativePortTitleCadenceHost {
   public:
     explicit NativePortDesktopHost(
         const NativePortGraphicsConfig& graphics_config = {},
@@ -1118,6 +1120,9 @@ class NativePortDesktopHost final : public NativePortHostServices {
     void synchronize_simulation_boundary() override;
     void begin_frame(std::uint64_t frame_index) override;
     void present_frame(std::uint64_t frame_index) override;
+    [[nodiscard]] bool title_cadence_available() const noexcept override;
+    void wait_until_title_deadline(std::uint64_t deadline_nanoseconds) override;
+    void present_frame_after_title_cadence(std::uint64_t frame_index) override;
     [[nodiscard]] std::uint64_t presented_frames()
         const noexcept override;
     [[nodiscard]] NativePortFramePacingSnapshot frame_pacing_snapshot()

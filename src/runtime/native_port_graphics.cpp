@@ -9078,6 +9078,33 @@ void NativePortDesktopHost::present_frame(const std::uint64_t frame_index) {
     paced_present();
 }
 
+bool NativePortDesktopHost::title_cadence_available() const noexcept {
+    return frame_pacing_config_.enabled &&
+           graphics_.independent_presentation_enabled();
+}
+
+void NativePortDesktopHost::wait_until_title_deadline(
+    const std::uint64_t deadline_nanoseconds) {
+    if (monotonic_time_nanoseconds() < deadline_nanoseconds)
+        wait_until_monotonic_nanoseconds(deadline_nanoseconds);
+}
+
+void NativePortDesktopHost::present_frame_after_title_cadence(
+    const std::uint64_t frame_index) {
+    static_cast<void>(frame_index);
+    apply_runtime_presentation_rate();
+    graphics_.record_simulation_frame_nonblocking();
+    if (graphics_.frame_recording_open_nonblocking()) graphics_.present();
+    // The independent render owner repeats an unchanged image by itself.
+    saturating_increment(frame_pacing_snapshot_.simulation_frames);
+    reconcile_presentations();
+    // A later generic owner must start a fresh simulation epoch. The
+    // independent presentation thread retains its own clock and phase.
+    frame_pacing_started_ = false;
+    next_simulation_deadline_nanoseconds_ = 0u;
+    simulation_deadline_remainder_ = 0u;
+}
+
 std::uint64_t NativePortDesktopHost::presented_frames() const noexcept {
     return graphics_.presented_frames_nonblocking();
 }

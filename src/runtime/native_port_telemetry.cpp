@@ -1,4 +1,5 @@
 #include "katana/runtime/native_port_telemetry.hpp"
+#include <stdexcept>
 
 #include <chrono>
 #include <limits>
@@ -336,6 +337,32 @@ void NativePortTelemetryHostProxy::present_frame(
     const std::uint64_t frame_index) {
     render_packet_timer_.reset();
     host_->present_frame(frame_index);
+}
+
+bool NativePortTelemetryHostProxy::title_cadence_available() const noexcept {
+    const auto* cadence = dynamic_cast<const NativePortTitleCadenceHost*>(host_);
+    return cadence != nullptr && cadence->title_cadence_available();
+}
+
+void NativePortTelemetryHostProxy::wait_until_title_deadline(
+    const std::uint64_t deadline_nanoseconds) {
+    auto* cadence = dynamic_cast<NativePortTitleCadenceHost*>(host_);
+    if (cadence == nullptr || !cadence->title_cadence_available())
+        throw std::runtime_error("native-title-cadence-unavailable");
+    const bool resume_packet_timer = render_packet_timer_.has_value();
+    render_packet_timer_.reset();
+    cadence->wait_until_title_deadline(deadline_nanoseconds);
+    if (resume_packet_timer)
+        render_packet_timer_.emplace(*writer_, NativePortTelemetryStage::RenderPacketBuild);
+}
+
+void NativePortTelemetryHostProxy::present_frame_after_title_cadence(
+    const std::uint64_t frame_index) {
+    auto* cadence = dynamic_cast<NativePortTitleCadenceHost*>(host_);
+    if (cadence == nullptr || !cadence->title_cadence_available())
+        throw std::runtime_error("native-title-cadence-unavailable");
+    render_packet_timer_.reset();
+    cadence->present_frame_after_title_cadence(frame_index);
 }
 
 std::uint64_t NativePortTelemetryHostProxy::presented_frames()
