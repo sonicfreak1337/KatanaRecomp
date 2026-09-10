@@ -7,6 +7,16 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (9. September 2026)
 
+- Am 10. September bestaetigt der Nutzer Gamma und Knuckles Story zu 100 Prozent in
+  r339/0.49.6. Der naechste Export erhaelt 0.49.8; der zuvor vorgesehene
+  Gamma-Bump 0.49.7 wurde noch nicht exportiert. Der Nutzer hat den Batch
+  anschliessend geschlossen und r340/0.49.8 zum Export freigegeben. Er
+  uebernimmt weiter die Spieltests; Sonic und danach Super Sonic sind offen.
+  Vor Start dieses Exports ist auch der neue Chao-Garden-Crash aufzunehmen.
+  Der Nutzer verlangt die Pruefung des gesamten Chao-Moduls einschliesslich
+  Garten-/Rennmodulen und fehlender Callback-/Zustandsfamilien; belegte Luecken
+  werden im selben Batch ergaenzt, ohne bestehende Einsprungstellen zu verlieren.
+
 - Am 10. September bestaetigt der Nutzer Amy Story clear und korrekt
   laufende Credits in r338/0.49.5. Die naechste Version wird 0.49.6.
   Der Nutzer hat den r338-Batch nach Gamma-Boss, Knuckles und Sonic Final Egg

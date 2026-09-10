@@ -1,8 +1,56 @@
 # Aktueller Projektstand
 
+Stand: 10. September 2026, r340/0.49.8 exportiert, Linkaudit bestanden.
+Tails, Big, Amy, Gamma und Knuckles sind vom Nutzer vollstaendig durchgespielt.
+Chao: 79 neue quellgebundene Einsprungstellen, 95 inklusive der 16 erhaltenen
+Vorgaengereintraege. Darunter 43 Zustandshandler, 11 BRAF-Arme, 6 Rennpfad-
+und 19 weitere lokale Literalziele. AL_MAIN besitzt nun 21.153 statt 15.114
+exakte AOT-Blockeinstiege. Alle 249 Module und bisherigen Einstiege bleiben
+erhalten; keine eigene Spielausfuehrung und keine Strict-Proof-Promotion.
+CLI-Export 757.229 ms (ohne Wrapper-Preflight), Hostbuild 89.202 ms:
+28 AOT-Dateien, insgesamt 37 Uebersetzungseinheiten neu kompiliert. Das
+Zehn-Minuten-Ziel wird weiterhin verfehlt; Analyse/Validierung dominiert.
+Der Nutzer testet r340 seit 13:29:45; Save-Hashes haben sich durch seinen
+Lauf geaendert. Kein Agenten-Save-Restore und kein eigener Spielstart.
+Sonic Final Egg bleibt ohne bestaetigten Ursachenfix; Allocator-Preflight und
+Fehlerkapsel liefern nun zusaetzliche Absicherung und Daten. Der Nutzer
+bestaetigt den weiterhin falschen Light-Speed-Dash-Effekt; der r340-Witness
+ist vorhanden und wird fuer den naechsten Grafikfix ausgewertet.
+EXE SHA-256: `3709c9a303fbd3a21ceeaeaa4274d0028dcdff26b0c2f6ea26cbbe1b5b48611d`.
+Packdatei SHA-256: `3ccc5a45aeef59a4c58e05e686a0548273ec9f8fed194b3aca84213dd87211f3`.
+Profil 47, 1.107 Partitionen, 19.263 Funktionen, 309.592 Bloecke.
+Evidence: `private/diagnostics/r340-user-story-crash-batch-20260910a/result.json`.
+
+## Vorheriger Stand und Quellvorbereitung
+
 Stand: 10. September 2026, r339/0.49.6 exportiert und Linkaudit bestanden.
-Kein eigener Spielstart; die drei reparierten Storypfade sind noch nicht
-erneut im Spiel bestaetigt. Die zentralen Saves sind vor/nach Export SHA-gleich.
+Kein eigener Spielstart. Der Nutzer bestaetigt Gamma und Knuckles zu 100 Prozent;
+Tails, Big, Amy, Gamma und Knuckles sind damit durchgespielt. Version 0.49.8 ist fuer
+den naechsten Export gesetzt. Sonic Final Egg stoppt weiterhin bei der
+SDK-Texturfreigabe. Die neue r339-Kapsel identifiziert den Verwaltungswert
+an 0C88F5E0 als abgelehnte Kapazitaetspruefung; dessen Zahlenwert ist nicht
+aufgezeichnet. Der separat aufgezeichnete Wert 6283 ist der aktuelle
+Texturschluessel an 0C6733CC, keine Slotanzahl. Die Light-Speed-Dash-Diagnose
+hat beim Nutzerlauf keine Datei erzeugt und wird ebenfalls untersucht.
+Die zentralen Saves sind vor/nach Export SHA-gleich.
+Der offene Quellbatch erweitert die Fehlerkapsel um echte Highwater-/Cursor-
+Werte und korrigiert die begrenzte Dash-Diagnose vor Cull/Transform samt
+Dateifehlernachweis. Adapter-Syntaxpruefung besteht; kein weiterer Export.
+Diese Diagnoseaenderungen sind keine bestaetigten Sonic-/Grafikfixes.
+Zusaetzlich ist der gemeinsame SDK-Allocator 8C64E55E mit einer quellgebundenen
+MayContinueOriginal-Pruefung abgesichert: freie Slotwahl bleibt original,
+Full/ungueltige Metadaten stoppen vor dem Retail-One-past-end-Schreiben.
+13 gezielte Komponentenfaelle und Adapter-Syntaxpruefung bestehen. Der
+Guard ist noch nicht exportiert; ein echter Ressourcenverlust ist damit
+weder bewiesen noch behoben. Kein globaler Write-Watchpoint wird aktiviert,
+weil dieser die schnellen RAM-Schreibpfade im ganzen Spiel abschalten wuerde.
+Evidence: `private/diagnostics/r340-user-story-crash-batch-20260910a/`.
+Der nachtraeglich gemeldete Chao-Garden-Crash gehoert zum selben freigegebenen
+Batch. Er stoppt in AL_MAIN an einer bisher nicht kompilierten Zustandstabelle.
+Auf Nutzeranordnung werden AL_MAIN, die drei Gartenmodule und AL_RACE auf
+weitere belegte Tabellen-/Callback-Luecken abgeglichen; die vorhandenen
+Objektlisten und bisherigen Einsprungstellen bleiben erhalten. Keine eigenen
+Spielstarts; diese Quellpruefung ist keine vollstaendige Laufzeitabnahme.
 EXE SHA-256: `a0ede55f39813c41d7ddbb6a73dc0dbc9b705ab94d4e9ca9b22462073a956f4c`.
 Packdatei SHA-256: `1b2b4d3d1a331239a22f05796e5a8c69aeb595d8fae74ed3e7800b4f74d85d4b`.
 Profil 47, 1.098 Partitionen; genau eine AOT-Quelldatei ist gegen r338 geaendert.

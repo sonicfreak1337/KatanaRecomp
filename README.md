@@ -1,11 +1,14 @@
 # KatanaRecomp
 
-**Aktuelle Entwicklungsversion: 0.49.6**
+**Aktuelle Entwicklungsversion: 0.49.8**
 
-Entwicklungsstand r339/0.49.6 ist exportiert; die Spieltests uebernimmt
-der Nutzer. Der Batch repariert Gamma-Boss-Callback, NINJA-Projektion und
-SDK-Texturfreigabe; die zuvor gescheiterten Uebergaenge sind noch nicht erneut
-im Spiel bestaetigt. Der Light-Speed-Dash-Farbfehler bleibt mit Diagnose offen.
+Entwicklungsstand r340/0.49.8 ist exportiert; die Spieltests uebernimmt
+der Nutzer. Gamma und Knuckles sind ebenfalls vollstaendig durchgespielt;
+zusammen mit Tails, Big und Amy sind fuenf regulaere Kampagnen abgeschlossen.
+Der Chao-Batch ergaenzt 79 quellgebundene Einsprungstellen; alle bisherigen
+Module und Einsprungstellen bleiben erhalten. Sonic Final Egg hat zusaetzliche
+Allocator-Absicherung und Diagnose, noch keinen bestaetigten Fix.
+Der Light-Speed-Dash-Farbfehler bleibt offen; die neue Diagnose liefert Daten.
 Am 10. September 2026 bestaetigt der Nutzer in r338 Amys abgeschlossene Kampagne
 und korrekt laufende Credits. Nach Tails und Big sind damit drei Kampagnen
 durchgespielt. Deshalb erhaelt r339 Version 0.49.6; das bereits

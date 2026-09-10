@@ -4,6 +4,18 @@
 
 ### Geaendert
 
+- Entwicklungsversion 0.49.8 ist als r340 exportiert: Der Nutzer bestaetigt
+  Gamma und Knuckles zu 100 Prozent in r339/0.49.6. Damit sind Tails, Big,
+  Amy, Gamma und Knuckles durchgespielt. Der kurzzeitig geplante Bump 0.49.7
+  fuer Gamma wurde vor einem Export durch 0.49.8 ersetzt. Sonic Final Egg
+  und der Light-Speed-Dash-Farbfehler sind weiterhin offen. Der Chao-Batch
+  ergaenzt 79 quellgebundene Eintraege (95 einschliesslich Bestand) fuer
+  Zustandstabellen, BRAF-Arme, Rennpfad- und Folgeaufrufe. Alle 249 bisherigen
+  Module und ihre Einstiege bleiben erhalten. 28 AOT-Dateien wurden neu
+  kompiliert, insgesamt 37 Uebersetzungseinheiten; Linkaudit bestanden.
+  SDK-Allocator-Preflight schuetzt vor einem belegten Retail-One-past-end-Pfad;
+  ein Ressourcenverlust ist nicht bewiesen. Spieltests bleiben beim Nutzer.
+
 - Privater Sonic-Reparaturbatch nach r338: zusaetzlicher Gamma-Boss-Callback,
   originalgetreue konsumierte NINJA-Matrixausgaben und getrennte ungeladene
   SDK-Texturfreigabepfade. Gezielte Komponentenpruefungen bestehen; die
