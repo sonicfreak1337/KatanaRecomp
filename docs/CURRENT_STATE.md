@@ -1,5 +1,35 @@
 # Aktueller Projektstand
 
+Stand nach zwei weiteren r351-Crashes: r352/0.49.9 inkrementell exportiert.
+Der Menuepfad nach dem Opening verwendet den noch ausgewaehlten Super Sonic
+als siebten Index in zwei nur sechszeiligen Trial-Tabellen. Private, an die
+Originalfunktionen gebundene Grenzen liefern fuer diesen Charakter leere
+Listen; normale Charaktere laufen unveraendert durch den Originalcode.
+Die direkten Aufbereiter pruefen die Anzahl vor dem Zugriff. Kein Reset des
+Spielstands oder der globalen Charakterauswahl und keine VRAM-Emulation.
+
+Der zweite Crash betrifft eine Schrift aus einer einzelnen PVR-Datei mit
+einem expliziten SDK-Texturschluessel. Der neue gemeinsame Dateiimport
+publiziert diesen Schluessel samt Descriptor und Referenz ueber die vorhandene
+native Texturverwaltung. Dateiname und Attribute bleiben erhalten; bestehende
+Modulfonts und TextureSet-Lebenszyklen behalten ihren bisherigen Pfad.
+PVM-Archive verwenden dieselbe Transaktion mit ihrer bisherigen Semantik.
+Standalone-GBIX0 bleibt auch im Development-State gueltig.
+
+Gezielte Kompilierung und Manifestpruefung bestanden. Auf "export go"
+folgte ein Export im erhaltenen Performance-Baum:24 AOT-Dateien kompiliert,
+Linkaudit bestanden. Alle drei neuen Hook-Bindungen im Produkt geprueft;
+alle249 Module, ihre Quellbindungen und724516 bisherigen Moduleinstiege
+sowie alle27 Seedpfade erhalten. Kein game.exe-Start oder Replay.
+Beide Korrekturen sind noch nicht im Spiel bestaetigt.
+
+Exportkern685317 ms, kompletter warmer Wrapper728951 ms (12:09 Minuten).
+Die geaenderte SDK-Funktionsgrenze erforderte erneute Analyse und Admission;
+das Zehn-Minuten-Ziel wurde verfehlt. Kein Kaltwert. EXE SHA256:
+`441718c2e140686bfd1dd721906af7b258e38ef184395955428d287d088fab6b`.
+Evidence: `private/diagnostics/r352-postcomplete-menu-font-20260910a/review.md`,
+`build-result.json`, `wrapper.log` und `export.stdout.log`.
+
 Stand: 10. September 2026, r351/0.49.9: alle sieben Stories abgeschlossen.
 Der Nutzer bestaetigt nach seinem Super-Sonic-Lauf: "uuuund wir sind story
 complete!" Sonic, Tails, Knuckles, Amy, Big, Gamma und Super Sonic sind damit

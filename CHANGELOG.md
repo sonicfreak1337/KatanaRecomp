@@ -4,6 +4,15 @@
 
 ### Geaendert
 
+- r352/0.49.9 ist inkrementell exportiert: beide Trial-Listen behandeln
+  Super Sonic ohne Zugriff hinter ihre Charaktertabellen. Ein SDK-Adapter
+  laedt einzelne PVR-Dateien mit den vorgegebenen Texturschluesseln und nutzt
+  die vorhandene native Referenzverwaltung. Kompilierung und Manifestpruefung
+  sowie Linkaudit bestanden; alle drei neuen Hooks im Produkt enthalten.
+  24 AOT-Dateien kompiliert, alle249 Module und724516 bisherigen Einstiege
+  erhalten. Warmer Gesamtexport12:09 Minuten; beide Korrekturen sind noch
+  nicht im Spiel bestaetigt.
+
 - Der Nutzer bestaetigt in r351/0.49.9 auch Super Sonic als abgeschlossen.
   Damit sind alle sieben Stories durch Nutzerlaeufe beendet: Sonic, Tails,
   Knuckles, Amy, Big, Gamma und Super Sonic. Der Story-Meilenstein ist

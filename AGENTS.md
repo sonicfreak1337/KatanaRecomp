@@ -7,6 +7,19 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (10. September 2026)
 
+- Nach dem Storyabschluss meldet der Nutzer zwei weitere r351-Crashes:
+  nach dem Opening im Menue und beim Import einer einzelnen Schrifttextur.
+  Quellbatch r352 sichert beide Trial-Listen fuer Super Sonic ab und bindet
+  den SDK-Dateiimport an die vorhandene native Texturverwaltung. Adapter,
+  Projektgenerator und Manifest sind gezielt kompiliert; Manifest validiert.
+  Auf "export go" ist r352/0.49.9 inkrementell exportiert: 24 AOT-Dateien
+  kompiliert, Linkaudit bestanden, alle drei neuen Hooks gebunden. Alle249
+  Module, ihre Quellbindungen und724516 bisherigen Einstiege bleiben erhalten.
+  Exportkern685317 ms, ganzer warmer Wrapper728951 ms (12:09); das verfehlt
+  das Zehn-Minuten-Ziel wegen erneuter Analyse/Admission der SDK-Grenze.
+  Kein eigener Spieltest; Gameplaynachweis beim Nutzer offen. Lokal committen,
+  kein Push. Neue Crashmeldungen sind kein weiteres Batch-/Exportsignal.
+
 - Der Nutzer bestaetigt nach r351: "uuuund wir sind story complete!"
   Damit sind Sonic, Tails, Knuckles, Amy, Big, Gamma und Super Sonic durch
   Nutzerlaeufe abgeschlossen. Der Transformations-/Finalpfad ist jetzt im
