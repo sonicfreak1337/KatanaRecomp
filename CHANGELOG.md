@@ -4,6 +4,15 @@
 
 ### Geaendert
 
+- r350/0.49.9 schliesst die bisher ausgelassene ObjectList des zerstoerten
+  Station Square: 37 Datensaetze mit 20 lokalen Objektcallbacks sowie deren
+  Wrapper-, Update-, Darstellungs- und Aufraeumfamilien liefern 41 neue
+  Funktionswurzeln. Alle Roots und 20 Tentakel-Zustandszweige sind im
+  fertigen Produkt nachgewiesen; 1336 weitere B_CHAOS7-Blockeinstiege,
+  alle bisherigen Module und Einstiege erhalten. Drei AOT-Dateien kompiliert,
+  1111 Quellpartitionen wiederverwendet, Linkaudit bestanden. Gesamter
+  warmer Export 8:17 Minuten; Gameplaybestaetigung beim Nutzer offen.
+
 - r349/0.49.9 erweitert die geprueften Objekt- und Folgefamilien des
   zerstoerten Station Square um 14 Funktionswurzeln einschliesslich
   Darstellung, Aufraeumen und weiterer Task-Initialisierung. Daraus entstehen

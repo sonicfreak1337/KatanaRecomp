@@ -1,5 +1,40 @@
 # Aktueller Projektstand
 
+Stand: 10. September 2026, r350/0.49.9 inkrementell exportiert.
+Drei AOT-Dateien kompiliert, 1111 Quellpartitionen wiederverwendet,
+Linkaudit bestanden. EXE SHA-256:
+`ac6cbf4abacd3006b22388940f3617e85b6cd8532752e3e831c423ebc9fc1a44`.
+
+Der neue r349-Nutzercrash trifft den fehlenden Task-Update-Einstieg der
+braunen Gebaeudefamilie im zerstoerten Station Square (B_CHAOS7). Der
+vorherige Scan hatte eine eigene 0x14-Byte-ObjectList nicht erfasst.
+Geprueft sind jetzt ihr Count/Pointer-Header, alle 37 Datensaetze und die
+Folgefamilien der 20 lokalen Objektcallbacks: Gebaeude, Autos, Strassen,
+Truemmer, Tentakel, Absperrungen, Reifen, Signal und Beschleunigungsfeld.
+Die Erweiterung enthaelt 20 direkte Tabellenziele, fuenf weitere belegte
+Wrapper-Varianten, fuenf gemeinsame Updates und elf lokale Folgefunktionen.
+
+Alle 41 neuen Roots und alle 20 Tentakel-BRAF-Zustandsziele sind als exakte
+Einstiege im fertigen Produkt enthalten; ihre 61 Blockhashes stimmen mit
+den Originalbytes ueberein. B_CHAOS7 waechst von 6485 auf 7821 Einstiege
+(+1336). Alle 249 Modulidentitaeten und Quellbindungen sowie alle 722731
+bisherigen Moduleinstiege bleiben erhalten. Die 219 geerbten globalen Roots
+bleiben bytegleich als Praefix erhalten; jetzt 260, die 26 anderen Seedpfade
+sind unveraendert. Namen, Modellzeiger und SET-Daten werden nicht zu Code.
+Quellgebundene Candidate-Familie, keine Strict-Promotion und kein Beweis
+fuer alle beliebig berechneten Laufzeitziele des gesamten Moduls.
+
+Ein kanonischer Export im bestehenden Performance-Buildbaum: 478.960 ms
+Exportkern, 496.847 ms gesamter warmer Wrapper (8:17 Minuten). Die fruehe
+Versionspruefung bestaetigt 0.49.9; kein CLI-/Provenance-Neuaufbau und kein
+Kaltbuildnachweis. Keine eigenen Spielstarts, Replays oder Eingaben; der
+Nutzer prueft den weiteren Super-Sonic-Fortschritt. Keine neue FPS-Messung.
+Evidence: `private/diagnostics/r350-chaos7-registry-20260910a/review.md`,
+`build-result.json`, `export.stdout.log` und
+`private/analysis/sonic-adventure-pal-v1003/r350-chaos7-object-registry-v1/chaos7-object-registry-audit.json`.
+
+## Vorheriger Export r349
+
 Stand: 10. September 2026, r349/0.49.9 inkrementell exportiert.
 Vier AOT-Dateien kompiliert, Linkaudit bestanden. EXE SHA-256:
 `6748db0745fd7894b6fdd0ff23b841bb1dd1777a04578c0cdfb65781a3b331ad`.

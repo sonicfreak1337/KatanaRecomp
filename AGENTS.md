@@ -7,6 +7,19 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (10. September 2026)
 
+- Der anschliessende r349-Nutzercrash trifft in B_CHAOS7 die braune
+  Gebaeudefamilie. Der vorherige Bereichsscan hatte die separate ObjectList
+  mit 37 Eintraegen zu je 0x14 Bytes nicht erfasst. r350/0.49.9 ergaenzt
+  41 quellgebundene Funktionswurzeln fuer diese Tabelle und ihre geprueften
+  Folgefamilien. Alle 41 Roots und 20 Tentakel-Zustandszweige sind im Produkt
+  enthalten; B_CHAOS7 steigt von 6485 auf 7821 Blockeinstiege (+1336).
+  Alle 249 Modulidentitaeten, Quellbindungen und 722731 bisherigen
+  Moduleinstiege bleiben erhalten. Drei AOT-Dateien kompiliert, 1111
+  Quellpartitionen wiederverwendet, Linkaudit bestanden. Exportkern
+  478.960 ms, kompletter warmer Wrapper 496.847 ms; kein Kaltwert.
+  Keine eigenen Spielstarts, Replays oder Eingaben. Nutzer prueft Gameplay;
+  keine universelle Vollstaendigkeitsbehauptung. Lokal committen, kein Push.
+
 - Der r348-Nutzercrash liegt im zerstoerten Station Square, B_CHAOS7.
   Auf ausdruecklichen Auftrag wurden der Bereich und seine bekannten
   Folgefamilien geprueft: r349/0.49.9 enthaelt 14 weitere Funktionswurzeln
