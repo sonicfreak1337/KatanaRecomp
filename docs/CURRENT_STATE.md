@@ -1,5 +1,42 @@
 # Aktueller Projektstand
 
+Stand: 10. September 2026, r343/0.49.8 als Sonic-Testbuild exportiert.
+Auf die erneute Anordnung "Sonic ist der Test" wurde der kleine Build vorgezogen:
+1 Adapter, 0 AOT-Compiles, 84.207 ms im Produkthelfer; Linkaudit bestanden.
+Analyse, generierte Quellen und AOT-Pack sind bytegleich zu r342. Kein Agenten-
+Spielstart; die Story-/Dash-Bestaetigung erfolgt durch den Nutzer.
+
+Der generische 6087FC-Freigabepfad fuehrt jetzt die kompilierte originale
+64DD00-Routine fuer jede TEXNAME-Referenz aus, statt fuer unbekannte native
+Owner pauschal -1 zurueckzugeben. Reihenfolge, Referenzen, Aliasse und letzter
+Fehlerindex folgen dem SDK. Ausstehende GPU-Freigaben werden korrekt budgetiert;
+auch Type0 geladen -> ungeladen mit verbleibenden Registry-Flags entwertet
+sein freigegebenes GPU-Backing. Die r342-Final-Egg-Kapsel zeigte weiterhin eine
+volle Registry; die erfolgreiche konkrete Storypassage ist noch nicht belegt.
+
+Der graue Dash hat einen nachgewiesenen Materialfehler: Originalmodelle besitzen
+einen gueltigen schwarzen Materialeintrag trotz Materialzaehler null. Alle drei
+Basic-Owner lesen nun wie das Original die tatsaechlich referenzierte Tabelle.
+Deklarierte Metadaten bleiben fuer bestehende Modellidentitaeten getrennt.
+15 gezielte Materialfaelle, alle 65.536 Flycast-TA-Farbtabelleneintraege,
+6 Freigabe-Komponentengruppen und Adapter-Syntaxpruefung bestehen.
+
+Chao Race: 21 neue quellgebundene Einstiege sind vorbereitet (95 alte Zeilen
+bytegleich, 116 insgesamt), aber NICHT im r343-Mikrobuild enthalten. Ihr AOT-
+Export folgt erst im naechsten freigegebenen Batch. Der alte Exportverweis auf
+entfernte r318-r321-Proofinputs wurde durch einen verifizierten kompakten
+Candidate-Checkpoint ersetzt: 10 Familien, 14 bestehende Roots, 0 Promotionen.
+Keine historischen Dateihashes wurden ersetzt oder neue Einstiege erfunden.
+
+EXE SHA-256: `4512b3e29949b58b2715596c9f8ff97a2f5acae56f11e503e1c18cfcd556f1d1`.
+Pack SHA-256: `3ccc5a45aeef59a4c58e05e686a0548273ec9f8fed194b3aca84213dd87211f3`.
+Provider SHA-256: `b973c40a41af675191f355f219bfd3b348d80f98a600c50ef4617e0c393d91ed`.
+Evidence: `private/diagnostics/r343-dash-color-20260910a/review.md`,
+`source-bindings.json` und `microbuild/build-result.json`. Private Quellaenderungen
+bleiben ausserhalb des oeffentlichen Git-Repositories. Lokal committen, kein Push.
+
+## Vorheriger Export r342
+
 Stand: 10. September 2026, r342/0.49.8 inkrementell exportiert.
 Der Nutzer hat den r341-Batch mit "batch vollstaendig" geschlossen.
 Der Sonic-Crash zeigt eine volle SDK-Registry mit 2.048 belegten Eintraegen.

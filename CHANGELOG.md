@@ -4,6 +4,18 @@
 
 ### Geaendert
 
+- r343/0.49.8 ist der vorgezogene Sonic-Testbuild: generische SDK-TEXLIST-
+  Freigabe ueber die originale kompilierte Routine statt pauschalem Fehler;
+  korrekte Materialtabellen-Reads bei Zaehler null fuer alle Basic-Owner.
+  Der bisherige weisse Ersatz erklaert den grauen Light-Speed-Dash anhand
+  originaler schwarzer Materialdaten. Freigabe-Budget und Type0-Backing-
+  Invalidierung sind mitgeprueft. 15 Materialfaelle, 65.536 Flycast-TA-
+  Farbwerte, 6 Freigabegruppen und Linkaudit bestehen. Mikrobuild 84.207 ms,
+  1 Adapter, 0 AOT-Compiles, Pack unveraendert. Gameplaybestaetigung offen.
+  Die vorbereiteten 21 Chao-Race-Einstiege sind noch nicht enthalten.
+  Veraltete Analyseabhaengigkeiten wurden fuer den folgenden AOT-Batch
+  durch einen quellgebundenen Candidate-Checkpoint abgeloest.
+
 - r342/0.49.8 schliesst eine SDK-Registry-Leckquelle beim Ueberschreiben
   authentifizierter Texturtraeger: die SDK-Referenzen werden vor den neuen
   Bytes transaktional freigegeben. PVM-Lookup-Aliasse zaehlen nicht als

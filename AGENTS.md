@@ -7,6 +7,15 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (9. September 2026)
 
+- Am 10. September priorisiert der Nutzer erneut "Sonic ist der Test" und
+  einen schnellen Build. r343/0.49.8 ist daraufhin als Mikrobuild mit Story-
+  Freigabe- und Dash-Materialfix exportiert: 84.207 ms, 1 Adapter, 0 AOT-
+  Compiles, alter Pack bytegleich, Linkaudit bestanden. Die vorbereiteten
+  21 Chao-Race-Roots sind NICHT enthalten; fuer deren spaeteren AOT-Batch
+  liegt die alte Inputkette als verifizierter Candidate-Checkpoint vor.
+  Nutzer testet selbst; keine Agenten-Spielstarts. Jetzt lokal committen,
+  nicht pushen; keinen zweiten Export vor dem naechsten Nutzersignal.
+
 - Am 10. September schliesst der Nutzer den r341-Batch mit "batch vollstaendig".
   r342/0.49.8 ist inkrementell exportiert: 1 Adapter, 0 AOT-Dateien,
   81.635 ms im Produkthelfer, unveraenderter Pack, Linkaudit bestanden.
