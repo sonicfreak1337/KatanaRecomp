@@ -7,11 +7,20 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (10. September 2026)
 
+- Der Nutzer hat die Replaysteuerung zurueckgenommen und testet wieder selbst.
+  Keine weiteren Replays oder automatischen Eingaben. Der normale r347-Lauf
+  bestaetigt denselben TIKAL-Owner-Stop. r348/0.49.9 ist unter der aktuellen
+  autonomen Reparaturfreigabe inkrementell exportiert: 70.156 ms ganzer
+  Wrapper, 62.987 ms Buildhelfer, 1 Adapter, 0 AOT-Compiles, Linkaudit bestanden.
+  r348 wird ohne Replayargumente zur Nutzersteuerung gestartet. Der TIKAL-
+  Folgepfad ist noch nicht im Spiel bestaetigt. Keine neuen Exporte waehrend
+  seines laufenden Tests; Quellarbeit bleibt erlaubt. Lokal committen, kein Push.
+
 - r347/0.49.9 ist als Mikrobuild exportiert: 94.056 ms, 1 Adapter,
   0 AOT-Compiles, Linkaudit bestanden. Der exakte r346-Crash wurde vorher
   mit isoliertem Save reproduziert; r347 passiert denselben Frame1465.
-  Super-Sonic-Folgepfadtest laeuft mit unveraendertem Inputpraefix und
-  neutralem Tail weiter. Lokal committen, kein Push.
+  Der damalige Super-Sonic-Folgepfadtest wurde fuer Nutzersteuerung beendet.
+  Kein Nachweis des spaeteren TIKAL-Uebergangs durch diesen Replaylauf.
 
 - Nach dem neuen r346-Crash gibt der Nutzer die autonome Reparatur und
   eigene Super-Sonic-Storytests frei: bis zum Boss laufen nur Cutscenes.

@@ -1,5 +1,37 @@
 # Aktueller Projektstand
 
+Stand: 10. September 2026, r348/0.49.9 inkrementell exportiert.
+70.156 ms gesamter warmer Wrapper, 62.987 ms Buildhelfer, 1 Adapter,
+0 AOT-Compiles, Linkaudit bestanden. Pack und generierte Quellen unveraendert.
+EXE SHA-256:
+`93cd325d33ec58003fb9c4165f5f44b6a6932b9e9dfbb1dab5336d24f9a33a70`.
+
+Zwei normale r347-Nutzerlaeufe stoppen beim selben TIKAL-Acquire:
+PC 8C099690, PR 8C049606, TEXLIST 0CB01814, Frames 8400 und 8193.
+Die Liste liegt in TIKAL_PROG, gehoert aber bereits einem aktiven TextureSet.
+Der Named-Loader leitete einen zusaetzlichen Modulbesitzer allein aus dieser
+Speicherlage ab und verwarf die gemeinsame Benutzung. Der Fix beweist zuerst
+die vollstaendige aktive Setzeile samt Katalog/Header/Referenz und erhaelt
+dann den Set-Besitz fuer Named-Acquire, Wiederholung und Erneuerung. Die
+vorhandenen Freigabe- und Saved-State-Pfade zaehlen die echten Besitzer weiter.
+Fremde Kataloge, geaenderte Deskriptoren und echte Modulbesitzer bleiben geprueft.
+
+Die Originalbytes binden den Request an EV0160s Named-Tabelle, Eintrag 8,
+und den vorhandenen Primary-SDK-Aufruf. Keine neue AOT-Root erforderlich.
+Die Deskriptorbilder 1/2 der Capsule sind aktuelle/publizierte Zeilen;
+Bilder 3/4 sind historische Vor-/Ersetzungsbilder, kein aktueller Free-Beweis.
+SAOW liefert kuenftig auf diesem Fehlerpfad zusaetzlich getrennte Carrier-
+und Besitzerinformationen. Decoder benennt die vier Bildrollen ausdruecklich.
+
+Der Nutzer uebernimmt wieder alle Spieleingaben; r348 startet normal ohne
+Replay. Der reparierte TIKAL-Uebergang und der weitere Super-Sonic-Abschluss
+sind noch nicht im Spiel bestaetigt. Keine neue FPS- oder Kaltbuildmessung.
+Evidence: `private/diagnostics/r348-super-sonic-20260910a/review.md`,
+`captured-crashes.json`, `microbuild/build-result.json`,
+`microbuild/micro-runtime-contract.json` und `export.log`.
+
+## Vorheriger Export r347
+
 Stand: 10. September 2026, r347/0.49.9 inkrementell exportiert.
 94.056 ms Buildhelfer, 1 Adapter, 0 AOT-Compiles; Linkaudit bestanden,
 Pack unveraendert. EXE SHA-256:
@@ -15,9 +47,10 @@ vollstaendig geprueften physischen Descriptor. Die Capsule erhaelt auf diesem
 Fehlerpfad zusaetzlich Listenauswahl und Owner-/Registry-/PVM-Details.
 
 r347 hat mit identischem aufgezeichnetem Inputpraefix plus neutralem Tail
-die alte Fehlerstelle passiert und laeuft ueber Frame2099 weiter. Der Nutzer
-hat eigene sichtbare Super-Sonic-Tests freigegeben; der Save ist isoliert.
-Der Folgepfad bis zum Boss ist noch in Pruefung. Evidence:
+die alte Fehlerstelle passiert. Der Lauf wurde bei Frame6262 zurueckgegeben.
+Ein weiterer Versuch erreichte etwa Frame6899 und wurde ebenfalls fuer die
+Nutzersteuerung beendet; keiner bestaetigt den spaeteren TIKAL-Uebergang.
+Der Nutzer lehnt weitere Replaysteuerung ab. Evidence:
 `private/diagnostics/r347-super-sonic-20260910a/reproduction-evidence.json`,
 `texture-review/review.md`, `microbuild/build-result.json` und
 `replay-r347-super-sonic-20260910a/game.stderr.log`.

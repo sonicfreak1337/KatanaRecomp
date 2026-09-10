@@ -4,6 +4,14 @@
 
 ### Geaendert
 
+- r348/0.49.9 korrigiert die gemeinsame TIKAL-Texturliste beim Super-Sonic-
+  Eventwechsel: bewiesener aktiver TextureSet-Besitz bleibt auch dann erhalten,
+  wenn die Liste in einem geladenen Datenmodul liegt. Wiederholtes Named-Laden,
+  Freigabe und Erneuerung behalten die bestehenden Eigentumsvertraege.
+  Fehler-Capsules trennen Datenmodul und Texturbesitzer. Mikrobuild mit
+  0 AOT-Compiles: 70.156 ms ganzer warmer Wrapper, 62.987 ms Buildhelfer,
+  Linkaudit bestanden. Normaler Start ohne Replay; Gameplaybestaetigung offen.
+
 - r347/0.49.9 repariert die Texturbindung originaler Eintrag-Aliasse:
   eine separate TEXLIST darf den vorhandenen, vollstaendig validierten
   physischen PVM-Descriptor verwenden. Exakte TextureSet-Prioritaet und
@@ -11,7 +19,7 @@
   enthalten nun auch die tatsaechliche Basic-Texturauswahl samt SDK-Zeile.
   Der r346-Super-Sonic-Stop wurde exakt reproduziert und von r347 passiert.
   Mikrobuild 94.056 ms, 1 Adapter, 0 AOT-Compiles; Linkaudit bestanden.
-  Der weitergehende Storytest bis zum Boss laeuft noch.
+  Spaetere normale Nutzerlaeufe erreichen den in r348 bearbeiteten TIKAL-Stop.
 
 - Naechste Entwicklungsversion 0.49.9 nach dem bestaetigten Abschluss aller
   sechs regulaeren Stories. 0.5 folgt erst nach Super Sonic und Polish.
