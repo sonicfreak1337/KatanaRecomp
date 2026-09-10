@@ -1,5 +1,35 @@
 # Aktueller Projektstand
 
+Stand: 10. September 2026, r346/0.49.9 auf Nutzer-"build" als Mikrobuild
+exportiert. 0.5 folgt auf Nutzeranordnung erst nach Super Sonic und Polish.
+Buildhelfer: 73.715 ms, 1 Adapter-Compile, 0 AOT-Compiles; Linkaudit bestanden.
+AOT-Pack und generierte Quellen bleiben bytegleich zum r345-Bestand.
+
+Der Super-Sonic-Stop beim Eventwechsel betrifft die gemeinsame PVM-
+Texturverwaltung: identischer Kataloginhalt kann gleichzeitig in mehreren
+physischen SDK-Registry-Zeilen publiziert sein. Acquire und Saved-State-
+Preflight identifizieren Aliasse jetzt nach Katalog, Ordinal und physischer
+Zeile. Jede Publikation behaelt ihren eigenen Resident-Pin. Widerspruechliche
+Payloads derselben Zeile und ungueltige aktuelle SDK-Zustaende bleiben Fehler.
+Ein Python-Modell mit Quellklauselpruefung sowie C++-Build und Linkaudit
+bestehen; Gameplaybestaetigung steht aus.
+
+Die begrenzte Folgepfadpruefung bis zum letzten Super-Sonic-Event sowie Chaos 7
+findet keine belegte neue AOT-Root: bekannte Loader-, Task- und Literalziele
+sind im aktuellen Produkt vorhanden. Dies beweist nicht jeden dynamischen
+Folgezustand oder den abschliessenden Primary-Credits-Uebergang. Der Mikrobuild
+aktualisiert ausschliesslich das Host-Versionslabel auf 0.49.9 innerhalb des
+erhaltenen CMake-Vertrags; ABI-Pruefungen bleiben aktiv. Kein Agenten-Spielstart.
+Der Nutzer uebernimmt den Spieltest. Lokal committen, nicht pushen.
+
+EXE SHA-256: `62519d3709575f2254be43c7ddc818d6dc31bbaca52691958ba4a1cad77c639b`.
+Pack-Identitaet: `9e7b16c74a08873e33923af5d289568f12191352bfab9a4e41e197d54f65574a`.
+Pack-Metadaten-Datei-SHA: `cf95c62bd9c7226a3b31247d39bdaa34299bb97062bc1564721aeb2746d524a1`.
+Evidence: `private/diagnostics/r346-super-sonic-20260910a/microbuild/build-result.json`
+und `micro-runtime-contract.json`; Quellenpruefung im uebergeordneten Verzeichnis.
+
+## Letzter Export r345
+
 Stand: 10. September 2026, r345/0.49.8 inkrementell exportiert auf Nutzer-"go".
 Der Nutzer bestaetigt anschliessend: "sonic story beendet." Damit sind Sonic,
 Tails, Knuckles, Amy, Big und Gamma Story clear durch Nutzertests bestaetigt.

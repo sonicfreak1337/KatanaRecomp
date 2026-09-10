@@ -5,12 +5,25 @@ Phase und jeden Teilbereich dieses Repositories. Sie sind keine Empfehlung.
 Widersprechende aeltere Prozessbeschreibungen in Roadmap-, Task-, Status-,
 Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
-## Aktuelle Nutzeranordnung zum Sonic-Export (9. September 2026)
+## Aktuelle Nutzeranordnung zum Sonic-Export (10. September 2026)
+
+- Auf Nutzer-"build" ist r346/0.49.9 als Mikrobuild exportiert: PVM-
+  Publikationsfix und Versionslabel, 73.715 ms Buildhelfer, 1 Adapter,
+  0 AOT-Compiles, bytegleicher Pack, Linkaudit bestanden. Jetzt lokaler
+  Commit ohne Push. Spieltests bleiben beim Nutzer; kein weiterer Export
+  bis zum naechsten Batchsignal.
+
+- Neuer r345-Crash in Super Sonic Story: gemeinsame PVM-Texturverwaltung
+  bei EV00F3 -> EV00F4. Nutzer verlangt Pruefung der kompletten Folgepfade
+  und setzt die naechste Version auf 0.49.9; 0.5 erst nach Super Sonic und
+  Polish. Quellarbeit und begrenzte Familienpruefung, keine Zusatztestserien
+  oder Agenten-Spielstarts. Noch kein neuer Exportauftrag.
 
 - Der Nutzer bestaetigt in r345: "sonic story beendet." Alle sechs
   regulaeren Stories sind damit durch Nutzerlaeufe abgeschlossen. Naechster
   Story-Meilenstein ist Super Sonic; Chao bleibt separat offen. Daraus folgt
-  kein neuer Exportauftrag und kein Agenten-Spielstart. Version aktuell 0.49.8.
+  kein neuer Exportauftrag und kein Agenten-Spielstart. Exportversion dieses
+  bestaetigten Meilensteins: 0.49.8; naechste Quellversion: 0.49.9.
 
 - Auf Nutzer-"go" ist r345/0.49.8 exportiert: elf Egg-Viper-Handler und
   21 Chao-Race-Roots; 14 AOT-Compiles, 1098 Partitionen wiederverwendet,

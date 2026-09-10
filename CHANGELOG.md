@@ -4,6 +4,17 @@
 
 ### Geaendert
 
+- Naechste Entwicklungsversion 0.49.9 nach dem bestaetigten Abschluss aller
+  sechs regulaeren Stories. 0.5 folgt erst nach Super Sonic und Polish.
+  Als r346 auf Nutzer-"build" inkrementell exportiert.
+
+- Super-Sonic-Quellfix: gemeinsame PVM-Texturen werden je physischer SDK-
+  Publikation verwaltet; Acquire und Saved-State-Pruefung verwenden dieselbe
+  Identitaet. Das beseitigt den belegten falschen Konflikt beim Eventwechsel.
+  Die begrenzte Folgepfadpruefung einschliesslich Chaos 7 findet keine neue
+  fehlende AOT-Root. Mikrobuild: 73.715 ms, 1 Adapter und 0 AOT-Compiles,
+  AOT-Pack unveraendert, Linkaudit bestanden. Gameplaybestaetigung steht aus.
+
 - Der Nutzer bestaetigt Sonics Storyabschluss in r345. Damit sind alle sechs
   regulaeren Kampagnen durch Nutzerlaeufe beendet; Super Sonic bleibt offen.
 
