@@ -1,6 +1,6 @@
 # Aktueller Projektstand
 
-Stand: 10. September 2026, r335/0.49.5 inkrementell exportiert. Credits zeigen
+Stand: 10. September 2026, r336/0.49.5 inkrementell exportiert. Credits zeigen
 wieder lesbare Namen/Rollen und die richtigen wechselnden Hintergrundbilder.
 Die normale Framefamilie beruecksichtigt jetzt den aktiven Original-Videomodus
 und gemeinsam verbrauchte Completion-Slots. Emerald Coast und Windy Valley
@@ -39,6 +39,31 @@ der titelgesteuerten Kadenz. Dazu dienen echte Frame-/Zeitdifferenzen.
 
 ## Belegter Fortschritt
 
+- r336 erweitert den vorbereiteten Admission-Cache um ein getrenntes
+  NativeBringup-Profil. Nur Provider-Implementierungsidentitaeten werden fuer
+  dessen Semantikschluessel projiziert; aktuelle Source, exakte Archive,
+  Vorgaengerartefakte, Hooks, Backend, Guard-Inventar und erneut berechnete
+  Hardwarebefunde bleiben gebunden. Offene Bringup-Befunde werden erhalten,
+  niemals als Strict-Closure gewertet. Schema/Codec 2 verhindert Profilmischung.
+  Die gezielten Codec-/Korruptions-/Identitaetstests bestehen. Der reale Export
+  publiziert erstmals den neuen Cache; dessen spaeterer Verbrauch und ein
+  Netto-Zeitgewinn sind noch nicht gemessen. Erstbefuellung kostet zusaetzlich.
+  Der ebenfalls angebundene persistente FVA-Epoch-Cache ersetzt keine CFA oder
+  IR-Validierung. Sonics aktueller Coveragepfad deaktiviert FVA ausdruecklich
+  und nutzt diese Optimierung deshalb nicht. Kein Coverage-Zeitgewinn behauptet.
+  CLI-Export 329,34 s, Compile/Link 45,87 s, eine kompilierte Einheit und
+  1.386 wiederverwendete Einheiten. Wrapper-Vorpruefungen kommen hinzu;
+  kein Kaltbuildnachweis. Produkt-SHA256:
+  ecbc790053698ba38dd988cac4e3d47f0344d42291be4ad9225b9e939c316cd8.
+  Ein sichtbarer 60-s-Windy-Valley-Lauf mit Inputprofil 1, isolierten Saves
+  und ohne parallelen Build besteht ohne Capsule oder Forced Stop:
+  24,12 Titelupdates/s, 138,89 Praesentationen/s, P95 54,58 ms.
+  Der staerkste persistente Thread verbraucht im Endpunktmittel 32,06 ms
+  pro neuem Frame; das ist keine P95-CPU- oder Leistungspuffer-Garantie.
+  Runtime und Spiel-AOT wurden in diesem Batch nicht optimiert; Unterschiede
+  zu r335 sind kein isolierter Performancegewinn. Private Evidence:
+  `export-r336-export-cache-20260910a`,
+  `r336-sonic-action-stages-export-cache-20260910a`.
 - r334 misst im sichtbaren Credits-Fenster 49,9994 Titelupdates/s bei
   active_hz=50 und Release 1; die lesbare Schrift bleibt erhalten. Ein
   90-s-Emerald-Coast-Diagnoselauf speichert einen Quicksave und laedt ihn

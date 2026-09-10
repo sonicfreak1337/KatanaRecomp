@@ -477,6 +477,34 @@ std::string native_port_export_identity(
     return katana::io::sha256_bytes(std::move(material).finish());
 }
 
+// Admission reasons about the declared guest/provider contract. A rebuild of
+// the provider implementation alone cannot alter that guest proof. Keep every
+// other field exact, including whether an implementation identity is present.
+std::string native_port_admission_semantic_identity(
+    const katana::runtime::NativePortDefinition& definition) {
+    katana::runtime::validate_native_port_definition(definition);
+    auto projected = definition;
+    auto hooks = std::vector(definition.hooks.begin(), definition.hooks.end());
+    auto contracts = std::vector(definition.provider_semantic_contracts.begin(),
+                                 definition.provider_semantic_contracts.end());
+    constexpr std::string_view implementation_marker{
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000"};
+    for (auto& hook : hooks)
+        if (!hook.provider_implementation_identity.empty())
+            hook.provider_implementation_identity = implementation_marker;
+    for (auto& contract : contracts)
+        if (!contract.provider_implementation_identity.empty())
+            contract.provider_implementation_identity = implementation_marker;
+    projected.hooks = hooks;
+    projected.provider_semantic_contracts = contracts;
+    return native_port_export_identity(&projected);
+}
+
+bool native_bringup_prepared_admission_enabled(const PortExportOptions& options) {
+    return options.native_execution_profile == NativePortExecutionProfile::NativeBringup &&
+           !options.agent_analysis_artifacts_requested && !options.diagnostic_partial;
+}
+
 std::string native_port_build_identity_marker(
     const katana::runtime::NativePortDefinition& definition,
     const std::string_view artifact_identity) {
@@ -33553,6 +33581,41 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
                 }),
             resident_coverage_overrides->external_entry_hints.end());
         report_progress(options, "native-bringup-coverage-overrides-end");
+        // Reuse the analyzer's independently validated FunctionAnalysisEpoch,
+        // never a positive IR/closure result. CFA, lowering, optimization and
+        // the complete resident authority checks still run below.
+        std::unique_ptr<CodegenCache> coverage_epoch_cache;
+        std::string coverage_epoch_key;
+        std::string coverage_epoch_blob;
+        constexpr std::string_view coverage_epoch_name{"function-analysis-epoch.bin"};
+        if (options.native_execution_profile == NativePortExecutionProfile::NativeBringup &&
+            enable_function_value_analysis && !options.diagnostic_partial &&
+            !options.analysis_cache_root.empty() &&
+            !options.analysis_implementation_identity.empty()) {
+            try {
+                ensure_safe_port_directory(options.analysis_cache_root, "coverage-resident");
+                coverage_epoch_key = persistent_boot_epoch_cache_key(
+                    coverage_image, &*resident_coverage_overrides,
+                    options.analysis_implementation_identity);
+                coverage_epoch_cache = std::make_unique<CodegenCache>(
+                    options.analysis_cache_root / "coverage-resident");
+                if (auto stored = coverage_epoch_cache->load_bounded(
+                        coverage_epoch_key, coverage_epoch_name,
+                        katana::analysis::maximum_persistent_function_analysis_epoch_blob_bytes)) {
+                    coverage_epoch_blob = std::move(*stored);
+                    report_progress(options, "native-bringup-coverage-epoch-cache-candidate");
+                } else {
+                    report_progress(options, "native-bringup-coverage-epoch-cache-miss");
+                }
+            } catch (const std::bad_alloc&) {
+                throw;
+            } catch (const std::exception&) {
+                coverage_epoch_cache.reset();
+                coverage_epoch_key.clear();
+                coverage_epoch_blob.clear();
+                report_progress(options, "native-bringup-coverage-epoch-cache-unavailable");
+            }
+        }
         report_progress(options, "native-bringup-resident-coverage-analysis");
         detail::StructuredControlFlowProgress control_flow_progress(
             options.progress, "native-bringup-resident-coverage-analysis");
@@ -33583,6 +33646,30 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
         // Carry the selected discovery policy without changing the image ABI.
         coverage_analysis_options.enable_function_value_analysis =
             enable_function_value_analysis;
+        coverage_analysis_options.persistent_function_analysis_epoch_import_blob =
+            std::span(reinterpret_cast<const std::uint8_t*>(coverage_epoch_blob.data()),
+                      coverage_epoch_blob.size());
+        coverage_analysis_options.persistent_function_analysis_epoch_implementation_identity =
+            options.analysis_implementation_identity;
+        if (coverage_epoch_cache != nullptr) {
+            coverage_analysis_options.persistent_function_analysis_epoch_publish_callback =
+                [&](const std::span<const std::uint8_t> blob) {
+                    const auto content = std::string_view(
+                        reinterpret_cast<const char*>(blob.data()), blob.size());
+                    if (!coverage_epoch_blob.empty()) {
+                        if (coverage_epoch_blob != content &&
+                            !coverage_epoch_cache->replace_bounded_if_matches(
+                                coverage_epoch_key, coverage_epoch_name, coverage_epoch_blob,
+                                content, katana::analysis::maximum_persistent_function_analysis_epoch_blob_bytes))
+                            throw std::runtime_error("coverage-epoch-publication-raced");
+                    } else {
+                        coverage_epoch_cache->store_bounded(
+                            coverage_epoch_key, coverage_epoch_name, content,
+                            katana::analysis::maximum_persistent_function_analysis_epoch_blob_bytes);
+                    }
+                    report_progress(options, "native-bringup-coverage-epoch-cache-published");
+                };
+        }
         auto coverage_analysis = katana::analysis::analyze_control_flow(
             coverage_image,
             &*resident_coverage_overrides,
@@ -35268,6 +35355,13 @@ prepared_native_port_admission_identity(
         native_port_export_identity(options.native_port_definition);
     identity.native_port_artifact_identity =
         options.native_port_artifact_identity;
+    if (native_bringup_prepared_admission_enabled(options)) {
+        identity.profile = PreparedNativePortAdmissionProfile::NativeBringup;
+        identity.native_port_identity =
+            native_port_admission_semantic_identity(*options.native_port_definition);
+        identity.native_port_artifact_identity =
+            "native-port-admission-semantics-v1:" + identity.native_port_identity;
+    }
     identity.admission_implementation_identity = admission_implementation;
     identity.analyzer_abi = analysis_identity.analyzer_abi;
     identity.backend_abi = analysis_identity.backend_abi;
@@ -35813,13 +35907,17 @@ validate_prepared_native_port_admission_state(
                            state.native_hardware_closure,
                            expected_closure))
             return reject("native-hardware-closure-replay");
+        // NativeBringup preserves the exact freshly replayed open findings.
+        // The profile-separated cache does not promote hardware closure.
+        const bool strict_closure = !native_bringup_prepared_admission_enabled(options);
         if (!state.native_hardware_closure.definition_present ||
-            !state.native_hardware_closure.complete ||
-            !state.native_hardware_closure.gaps.empty() ||
-            !state.native_hardware_closure.replacement_reachability_proven ||
-            !state.native_hardware_closure
-                 .replacement_reachability_incomplete_frontier.empty() ||
-            state.native_hardware_closure.provider_semantic_misses != 0u ||
+            (strict_closure &&
+             (!state.native_hardware_closure.complete ||
+              !state.native_hardware_closure.gaps.empty() ||
+              !state.native_hardware_closure.replacement_reachability_proven ||
+              !state.native_hardware_closure
+                   .replacement_reachability_incomplete_frontier.empty() ||
+              state.native_hardware_closure.provider_semantic_misses != 0u)) ||
             state.native_hardware_closure.provider_semantic_contracts !=
                 native_port->provider_semantic_contracts.size() ||
             state.native_hardware_closure.provider_semantic_coverage !=
@@ -36875,7 +36973,7 @@ constexpr std::string_view native_disc_analysis_artifact_cache_name{
 constexpr std::string_view prepared_native_port_admission_cache_directory{
     "native-port-admission"};
 constexpr std::string_view prepared_native_port_admission_cache_name{
-    "prepared-native-port-admission-v1.bin"};
+    "prepared-native-port-admission-v2.bin"};
 
 std::vector<katana::io::InputProvenance> native_disc_input_provenance(
     const katana::platform::DreamcastDiscBoot& disc) {
@@ -41517,6 +41615,28 @@ std::size_t revalidate_current_game_project_singleton_edges(
                    .provider_semantic_summaries;
 }
 
+[[nodiscard]] bool prepared_native_port_admission_is_cacheable(
+    const NativeDiscAnalysisResult& analyzed,
+    const PortExportOptions& options) noexcept {
+    if (prepared_native_port_admission_is_product_closing(analyzed, options))
+        return true;
+    if (!native_bringup_prepared_admission_enabled(options) ||
+        !analyzed.admitted_state || analyzed.analysis_artifact_bytes.empty() ||
+        analyzed.analysis_artifact_identity.key.empty() || options.analysis_cache_root.empty() ||
+        options.game_project == nullptr || options.native_port_definition == nullptr ||
+        options.native_port_artifact_identity.empty() ||
+        !analyzed.summary.guarded_inventory_complete || !analyzed.summary.backend_admitted ||
+        !analyzed.admitted_state->backend_admitted ||
+        !analyzed.admitted_state->native_hook_proof_gaps.empty())
+        return false;
+    const auto& closure = analyzed.admitted_state->native_hardware_closure;
+    return closure.definition_present &&
+           closure.provider_semantic_contracts ==
+               options.native_port_definition->provider_semantic_contracts.size() &&
+           closure.provider_semantic_coverage == options.native_port_definition->provider_semantic_coverage &&
+           closure.provider_semantic_matches <= closure.provider_semantic_summaries;
+}
+
 std::optional<NativeDiscAnalysisResult>
 try_reuse_native_disc_analysis_artifact(
     const katana::io::ExecutableImage& initial_image,
@@ -42029,14 +42149,23 @@ try_reuse_native_disc_analysis_artifact(
             &result.call_graph,
             &result.pre_bootstrap_image};
 
-        // Only an unchanged, committed analysis generation may consume the
-        // persistent admission product. Agent/World materialization still
-        // needs the ephemeral owner-semantic cache, while every admission
-        // delta must execute the authoritative preparation path below.
+        // Agent/World materialization still needs the ephemeral semantic
+        // proof cache. A NativeBringup checkpoint can reuse guest admission
+        // only when every declared contract is identical after removing the
+        // provider build identity. Exact old/current artifacts were bound above.
+        const bool bringup_admission_reuse =
+            native_bringup_prepared_admission_enabled(options) &&
+            resume_artifact_requested &&
+            (!native_port_contract_changed ||
+             (options.resume_native_port_definition != nullptr &&
+              native_port_export_identity(options.resume_native_port_definition) ==
+                  artifact.identity.native_port_identity &&
+              options.resume_native_port_artifact_identity == artifact.identity.native_port_artifact_identity &&
+              native_port_admission_semantic_identity(*options.resume_native_port_definition) ==
+                  native_port_admission_semantic_identity(*options.native_port_definition)));
         const bool prepared_admission_cache_eligible =
-            product_generation_reuse_requested &&
-            !analysis_checkpoint_requested &&
-            !native_port_contract_changed &&
+            ((product_generation_reuse_requested && !analysis_checkpoint_requested &&
+              !native_port_contract_changed) || bringup_admission_reuse) &&
             !game_project_admission_delta &&
             game_project_edges_revalidated == 0u &&
             !program_index_site_provenance_repaired;
@@ -42276,7 +42405,7 @@ try_reuse_native_disc_analysis_artifact(
                 return reject("admission-replay-backend-admission");
         }
         const bool prepared_admission_product_closing =
-            prepared_native_port_admission_is_product_closing(
+            prepared_native_port_admission_is_cacheable(
                 result, options);
         if (!prepared_admission_cache_hit &&
             prepared_admission_identity.has_value() &&
@@ -42553,7 +42682,11 @@ void publish_native_disc_analysis_artifact(
                     options, "native-disc-analysis-artifact-publish-missed");
             }
         }
-        if (archive_requested) {
+        // Prepared bring-up admission must bind the exact archive serialized
+        // for this generation, including after a provider-implementation rebind.
+        // Keep those bytes even when no user-facing analysis archive was requested.
+        if (archive_requested ||
+            native_bringup_prepared_admission_enabled(options)) {
             result.analysis_artifact_bytes = std::move(bytes);
             report_progress(
                 options, "native-disc-analysis-archive-created");
@@ -44824,6 +44957,10 @@ NativeDiscAnalysisResult analyze_native_disc_port(
         // caller commits its new World/Ledger transaction.
         if (reused->analysis_artifact_bytes.empty())
             publish_native_disc_analysis_artifact(*reused, options);
+        // Publish against the final rebound archive, not the predecessor's
+        // digest. The next provider-only iteration consumes this exact pair.
+        if (native_bringup_prepared_admission_enabled(options))
+            static_cast<void>(publish_committed_native_disc_prepared_admission(*reused, options));
         return std::move(*reused);
     }
     if (options.product_analysis_generation_reuse_requested)
@@ -45423,6 +45560,8 @@ NativeDiscAnalysisResult analyze_native_disc_port(
     result.returned_receiver_diagnostic =
         std::move(returned_receiver_diagnostic);
     publish_native_disc_analysis_artifact(result, options);
+    if (native_bringup_prepared_admission_enabled(options))
+        static_cast<void>(publish_committed_native_disc_prepared_admission(result, options));
     if (options.agent_analysis_artifacts_requested)
         populate_native_disc_materialization_artifacts(result, options);
     return result;
@@ -45542,11 +45681,10 @@ NativeDiscAnalysisHintPublicationResult
 publish_committed_native_disc_prepared_admission(
     NativeDiscAnalysisResult& analyzed,
     const PortExportOptions& options) noexcept {
-    // A prepared admission product is useful only when the exact analysis
-    // archive and the same product-closing state are both present. A partial
-    // diagnostic result must remain an analysis generation, never become a
-    // positive product cache entry.
-    if (!prepared_native_port_admission_is_product_closing(
+    // The exact serialized archive is required for both profiles. NativeBringup
+    // retains its open hardware findings in a separate cache identity; agent
+    // diagnostics are never published as executable admission products.
+    if (!prepared_native_port_admission_is_cacheable(
             analyzed, options))
         return NativeDiscAnalysisHintPublicationResult::NotPending;
 

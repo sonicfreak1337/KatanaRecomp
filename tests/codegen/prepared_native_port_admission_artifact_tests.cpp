@@ -141,6 +141,35 @@ int main() {
             [](auto& value) { ++value.backend_abi; },
             "backend ABI");
 
+        // Sonic NativeBringup cache entries must never enter StrictProduct,
+        // even when their emitted program and all other identities match.
+        auto bringup = artifact;
+        bringup.identity.profile = katana::codegen::
+            PreparedNativePortAdmissionProfile::NativeBringup;
+        bringup.identity.key = katana::codegen::
+            prepared_native_port_admission_artifact_identity_key(bringup.identity);
+        require(bringup.identity.key != artifact.identity.key,
+                "NativeBringup and StrictProduct share a cache key");
+        const auto bringup_bytes = katana::codegen::
+            serialize_prepared_native_port_admission_artifact(bringup);
+        const auto bringup_parsed = katana::codegen::
+            parse_prepared_native_port_admission_artifact(bringup.identity.key, bringup_bytes);
+        require(bringup_parsed.state == katana::codegen::
+                    PreparedNativePortAdmissionArtifactState::Hit &&
+                bringup_parsed.artifact == bringup,
+                "NativeBringup profile was not retained");
+        require(katana::codegen::parse_prepared_native_port_admission_artifact(
+                    artifact.identity.key, bringup_bytes).state != katana::codegen::
+                    PreparedNativePortAdmissionArtifactState::Hit,
+                "NativeBringup cache admitted under StrictProduct identity");
+        auto invalid_profile = bringup;
+        invalid_profile.identity.profile = static_cast<katana::codegen::
+            PreparedNativePortAdmissionProfile>(2u);
+        invalid_profile.identity.key = katana::codegen::
+            prepared_native_port_admission_artifact_identity_key(invalid_profile.identity);
+        require(!katana::codegen::prepared_native_port_admission_artifact_cacheable(invalid_profile),
+                "unknown admission profile was cacheable");
+
         auto partial = artifact;
         partial.identity.native_port_artifact_identity.clear();
         partial.identity.key = katana::codegen::

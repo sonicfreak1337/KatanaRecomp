@@ -10,12 +10,17 @@
 namespace katana::codegen {
 
 inline constexpr std::uint32_t
-    prepared_native_port_admission_artifact_schema_version = 1u;
+    prepared_native_port_admission_artifact_schema_version = 2u;
 inline constexpr std::uint32_t
-    prepared_native_port_admission_artifact_codec_version = 1u;
+    prepared_native_port_admission_artifact_codec_version = 2u;
 inline constexpr std::size_t
     maximum_prepared_native_port_admission_artifact_bytes =
         256u * 1024u * 1024u;
+
+enum class PreparedNativePortAdmissionProfile : std::uint32_t {
+    StrictProduct = 0u,
+    NativeBringup = 1u,
+};
 
 // Exact, path-free dependencies of a prepared NativePort admission.  The
 // analysis archive digest deliberately accompanies its logical identity: a
@@ -30,6 +35,11 @@ struct PreparedNativePortAdmissionArtifactIdentity final {
     std::string native_port_identity;
     std::string native_port_artifact_identity;
     std::string admission_implementation_identity;
+    // NativeBringup may retain open hardware-closure findings, never convert
+    // them to a StrictProduct admission. Its NativePort fields are semantic
+    // projections; exact current artifact/source binding is checked separately.
+    PreparedNativePortAdmissionProfile profile =
+        PreparedNativePortAdmissionProfile::StrictProduct;
     std::uint32_t analyzer_abi = 0u;
     std::uint32_t backend_abi = 0u;
 

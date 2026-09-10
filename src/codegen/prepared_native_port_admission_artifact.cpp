@@ -12,7 +12,7 @@ namespace katana::codegen {
 namespace {
 
 constexpr std::string_view artifact_magic{
-    "katana-prepared-native-port-admission-v1"};
+    "katana-prepared-native-port-admission-v2"};
 constexpr std::size_t maximum_string_bytes = 64u * 1024u;
 constexpr std::size_t maximum_collection_items = 4u * 1024u * 1024u;
 constexpr std::size_t maximum_allocation_bytes =
@@ -202,6 +202,7 @@ void write_identity(
     output.text(identity.native_port_identity);
     output.text(identity.native_port_artifact_identity);
     output.text(identity.admission_implementation_identity);
+    output.u32(static_cast<std::uint32_t>(identity.profile));
     output.u32(identity.analyzer_abi);
     output.u32(identity.backend_abi);
 }
@@ -215,6 +216,7 @@ PreparedNativePortAdmissionArtifactIdentity read_identity(Reader& input) {
     identity.native_port_identity = input.text();
     identity.native_port_artifact_identity = input.text();
     identity.admission_implementation_identity = input.text();
+    identity.profile = static_cast<PreparedNativePortAdmissionProfile>(input.u32());
     identity.analyzer_abi = input.u32();
     identity.backend_abi = input.u32();
     return identity;
@@ -289,7 +291,7 @@ std::string prepared_native_port_admission_artifact_identity_key(
     std::string material;
     material.reserve(1024u);
     append_key_field(
-        material, "katana-prepared-native-port-admission-identity-v1");
+        material, "katana-prepared-native-port-admission-identity-v2");
     append_key_value(
         material, prepared_native_port_admission_artifact_schema_version);
     append_key_value(
@@ -300,6 +302,7 @@ std::string prepared_native_port_admission_artifact_identity_key(
     append_key_field(material, identity.native_port_identity);
     append_key_field(material, identity.native_port_artifact_identity);
     append_key_field(material, identity.admission_implementation_identity);
+    append_key_value(material, static_cast<std::uint32_t>(identity.profile));
     append_key_value(material, identity.analyzer_abi);
     append_key_value(material, identity.backend_abi);
     return katana::io::sha256_bytes(material);
@@ -309,7 +312,9 @@ bool prepared_native_port_admission_artifact_cacheable(
     const PreparedNativePortAdmissionArtifact& artifact) noexcept {
     try {
         const auto& identity = artifact.identity;
-        return valid_sha256(identity.key) &&
+        return (identity.profile == PreparedNativePortAdmissionProfile::StrictProduct ||
+                identity.profile == PreparedNativePortAdmissionProfile::NativeBringup) &&
+               valid_sha256(identity.key) &&
                identity.key ==
                    prepared_native_port_admission_artifact_identity_key(
                        identity) &&
