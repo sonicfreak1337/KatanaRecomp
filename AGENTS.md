@@ -7,6 +7,33 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (10. September 2026)
 
+- Neuer autonomer Auftrag: R353 zuerst inkrementell bauen, dann als
+  Vergleichsbasis fuer vollstaendige generische Erkennung nutzen. Nur Chao
+  ist laut Nutzer noch ungeprueft. Bestehende Erkenntnisse und Spielstand
+  erhalten; Ziel sind keine kuenftigen Adresssammlungen, hoehere Analyse-
+  und Exportleistung sowie allgemeine Katana-Optimierung. Erkennung hat
+  Vorrang. Kein Push. Der Auftrag gibt R353 zum Export frei; nachfolgende
+  Erkennungsarbeit wird gegen dessen unveraenderte Referenz ausgewertet.
+
+- R353/0.49.9 ist jetzt inkrementell exportiert: fuenf AOT-Dateien,
+  Linkaudit bestanden, drei neue Chao-Roots und108 zusaetzliche Moduleinstiege.
+  Alle249 Module, ihre Quellbindungen,724516 bisherigen Moduleinstiege und
+  252002 residenten Einstiege sind erhalten. Exportkern450268 ms, ganzer
+  warmer Wrapper468190 ms (7:48). Kein Kaltwert und kein eigener Spielstart.
+  Referenzinventur:19421 Funktionen,6469 eindeutige Seedrecords in27 Dateien,
+  kein fehlender Seed-Einstieg. Chao bleibt ungeprueft. R353 einfrieren;
+  Referenzadressen duerfen nur Vergleichsoracle sein, keine versteckten
+  Eingaben der kuenftigen generischen Erkennung. Lokaler Commit, kein Push.
+
+- Neuer r352-Nutzercrash in Chao Race: r353-Quellbatch ergaenzt die belegte
+  Effektinitialisierung, ihren Update-Callback und die lokale Bewegungshilfe.
+  Drei quellgebundene Candidate-Roots, globaler Seed273 -> 276; alter Praefix
+  bytegleich. Alle249 Modulimages plus Primary nach dem exakten gemeinsamen
+  Initialisierungsmuster durchsucht; nur Chao Race trifft. Anders kompilierte
+  Varianten sind damit nicht ausgeschlossen. Source-/Capsulepruefung und
+  Wrapper-Syntax bestanden, Sage bestaetigt die Closure. Kein Export oder
+  Spielstart: neue Crashmeldung ist kein Batch-/Exportsignal. Nutzer testet.
+
 - Nach dem Storyabschluss meldet der Nutzer zwei weitere r351-Crashes:
   nach dem Opening im Menue und beim Import einer einzelnen Schrifttextur.
   Quellbatch r352 sichert beide Trial-Listen fuer Super Sonic ab und bindet

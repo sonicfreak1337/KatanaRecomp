@@ -1,5 +1,44 @@
 # Aktueller Projektstand
 
+R353/0.49.9 ist auf Nutzerauftrag inkrementell exportiert und bildet die
+Vergleichsbasis fuer die anschliessende generische Erkennung. Ein originaler
+Chao-Effektinitialisierer, sein Update und seine Bewegungshilfe waren nicht
+im vorherigen Pack. Alle drei sind jetzt als Candidate-Roots enthalten. Die Capsule
+zeigt die unveraenderten Originalbytes und beide Callbackargumente.
+Die weiteren festen Aufrufe sind bereits gebunden, die Darstellung ebenfalls.
+Kein neuer Runtime-/Grafikhook und keine Aenderung der originalen Spiellogik.
+
+Globaler Seed273 -> 276 bei bytegleichem Altbestand. Exakter Musterscan ueber
+alle249 gebundenen Modulimages plus Primary: nur ein Treffer in Chao Race.
+Diese Pruefung beweist keine Vollstaendigkeit anders kompilierter Varianten.
+Quell-/Capsulevalidierung und Exportwrapper-Syntax bestanden; Sage bestaetigt
+die lokale Closure und vorhandenen Primary-Bindungen. Die bisherigen26 anderen
+Seedpfade bleiben unveraendert. Der Export erhaelt alle249 Module, ihre
+Quellbindungen,724516 bisherigen Moduleinstiege und252002 residenten
+Einstiege. Chao erhaelt108 weitere Blockeinstiege, insgesamt724624 in Modulen.
+Fuenf AOT-Dateien kompiliert, Linkaudit bestanden. Exportkern450268 ms,
+ganzer warmer Wrapper468190 ms (7:48 Minuten); kein Kaltwert. Kein Spielstart.
+Chao bleibt laut Nutzer ungeprueft; der restliche Stand ist die Referenz.
+EXE SHA256: `8a25cd785234d9b94554f510ffeb5352e073e977034da2660699ac837b401652`.
+Evidence: `private/diagnostics/r353-chao-race-motion-20260910a/review.md` und
+`private/analysis/sonic-adventure-pal-v1003/r353-chao-race-motion-family-v1/chao-race-motion-family-audit.json`.
+
+Der aktive Folgeauftrag priorisiert vollstaendige generische Erkennung vor
+Analyse-/Exportleistung und allgemeiner Optimierung. Die eingefrorene Inventur
+enthaelt19421 Funktionen,976589 Dispatch-Einstiege und6637 Seedrecords aus27
+Dateien; nach Normalisierung sind es6469 eindeutige Records. Alle Seedbindungen
+und exakten Seed-Einstiege sind im Produkt vorhanden. Hinzu kommen301 explizite
+Funktionsgrenzen,167 Sprungtabellen,62 Callbacktabellen und113 statische
+Einstiege im Spielprojekt. Diese Liste ist nur ein Vergleichsoracle und darf
+nicht als versteckte Rootquelle der generischen Erkennung dienen.
+Referenz: `private/analysis/sonic-adventure-pal-v1003/r353-generic-recognition-reference-v1/reference.json`.
+Die vollstaendige Verallgemeinerung ist noch nicht erreicht. Ein begrenzter
+Modulaudit vom Original-Konstruktor findet ohne die neuen Roots weder den
+Initialisierer noch Update/Bewegung; das gilt auch im Strict-Modulaudit.
+Naechster Schritt ist die konkrete Datenfluss-/Inventurluecke, keine blinde
+ABI-Umschaltung. Die R353-Phasenzeiten sind als unveraenderte Ausgangsmessung
+gesichert. Kein Push.
+
 Stand nach zwei weiteren r351-Crashes: r352/0.49.9 inkrementell exportiert.
 Der Menuepfad nach dem Opening verwendet den noch ausgewaehlten Super Sonic
 als siebten Index in zwei nur sechszeiligen Trial-Tabellen. Private, an die

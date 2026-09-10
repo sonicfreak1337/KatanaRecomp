@@ -4,6 +4,14 @@
 
 ### Geaendert
 
+- r353/0.49.9 fuer den neuen Chao-Race-Crash inkrementell exportiert: originale
+  Effektinitialisierung, Update und Bewegungshilfe als drei gemeinsame
+  Candidate-Roots und108 weitere Moduleinstiege. Alle bisherigen Module,
+  Quellbindungen und Einstiege erhalten; Linkaudit bestanden. Fuenf AOT-
+  Compiles, warmer Gesamtexport7:48 Minuten. Chao noch nicht im Spiel geprueft.
+  Vollstaendige Referenzinventur als Ausgangspunkt fuer generische Erkennung
+  und Analyse-/Exportoptimierung gesichert, ohne sie zur Rootautoritaet zu machen.
+
 - r352/0.49.9 ist inkrementell exportiert: beide Trial-Listen behandeln
   Super Sonic ohne Zugriff hinter ihre Charaktertabellen. Ein SDK-Adapter
   laedt einzelne PVR-Dateien mit den vorgegebenen Texturschluesseln und nutzt
