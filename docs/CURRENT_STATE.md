@@ -34,6 +34,20 @@ Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
 
 ## Reparaturbatch nach r338
 
+Nach dem Export wurde der private Sonic-Buildablauf gegen den r339-
+Wiederherstellungsfehler abgesichert: Micro-Dry-runs verwenden den absoluten
+CMake-Ninja-Pfad, bekannte inkompatible Tools werden vor Zugriff auf v7-Logs
+abgewiesen, und beide Wrapper sichern die echten Log-/Abhaengigkeits-/
+Buildgraphdateien vor sowie nach einem erfolgreichen Build. Der isolierte
+Test mit den zwei installierten Ninja-Versionen prueft die Ablehnung ohne
+Logaenderung, SHA-genaue Kopien, Ueberschreibschutz und gesperrte Metadaten.
+Auch die echte r339-Metadatensicherung besteht ohne Veraenderung des Logs;
+der Cachetyp `UNINITIALIZED` wird neben `FILEPATH` und `STRING` korrekt gelesen.
+PowerShell-Parserpruefungen bestehen. Ein weiterer Produktexport wurde dafuer
+nicht gestartet; die Wrapperintegration ist noch nicht in einem neuen
+Produktlauf bestaetigt. r339/game.exe bleibt unveraendert.
+Evidence: `private/diagnostics/r339-ninja-recovery-hardening-20260910b/`.
+
 Die drei neuen Nutzerkapseln sind getrennt ausgewertet. Gamma fehlt ein
 Callback aus der Partikelfactory des letzten Bossmoduls; die quellgebundene
 Pruefung aller elf Bossmodule ergaenzt einen Root und behaelt alle 193

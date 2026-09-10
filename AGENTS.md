@@ -295,6 +295,20 @@ native-bringup:
 
 ### Global-first und Family-first sind Pflicht
 
+- Vor jedem Zugriff auf einen erhaltenen Ninja-Buildbaum wird der absolute
+  `CMAKE_MAKE_PROGRAM`-Pfad aus dessen Cache gelesen. Kein nackter `ninja`-
+  Aufruf aus dem PATH fuer Dry-runs. Die Version wird ohne `-C` geprueft;
+  ein unbekanntes/inkompatibles Log darf nicht probeweise geoeffnet werden.
+  Die privaten Sonic-Wrapper sichern vor und nach erfolgreichen Builds
+  `.ninja_log`, `.ninja_deps`, CMakeCache und Buildgraph mit SHA-Bindung.
+  Die Sicherung ist keine automatische Wiederverwendungsautoritaet und
+  schreibt keine Logrecords oder Befehls-Hashes um.
+- Ein kopiertes Codegen-v2-Manifest beweist keine unveraenderte lokale
+  Dateiidentitaet: Windows-Datei-ID und ChangeTime sind ebenfalls gebunden.
+  Bei manueller Wiederherstellung muss der vollstaendige Ist-/Soll-Dateisatz
+  geprueft werden; belegte Altdateien werden separat erhalten statt als
+  aktuelle Generierung ausgegeben. Die Loeschschutzpruefung des Generators
+  und die abschliessende exakte Manifestinventur bleiben aktiv.
 - Aktuelle Bring-up-Vorgabe: Bereits belegte Sonic-Adressfamilien duerfen
   vorerst vollstaendig als private, image-/byte-/generationgebundene
   Candidate-Vertraege erschlossen werden. Eine neue generische Analyzerregel
