@@ -1,6 +1,6 @@
 # Aktueller Projektstand
 
-Stand: 10. September 2026, r336/0.49.5 inkrementell exportiert. Credits zeigen
+Stand: 10. September 2026, r338/0.49.5 inkrementell exportiert. Credits zeigen
 wieder lesbare Namen/Rollen und die richtigen wechselnden Hintergrundbilder.
 Die normale Framefamilie beruecksichtigt jetzt den aktiven Original-Videomodus
 und gemeinsam verbrauchte Completion-Slots. Emerald Coast und Windy Valley
@@ -39,6 +39,30 @@ der titelgesteuerten Kadenz. Dazu dienen echte Frame-/Zeitdifferenzen.
 
 ## Belegter Fortschritt
 
+- r337 war ein verworfener CPU-Versuch: P1/P2-Fastcase im erhaltenen ABI-
+  Wrapper, direkte Nutzung des bestehenden Inlinehelpers in der Coverage-
+  Runtime und ein kuerzerer Bucket-Hash mit weiterhin vollstaendiger
+  Trefferpruefung. Komponenten- und vier sichtbare 60-s-Windy-Proben bestehen,
+  aber beide AB/BA-Paare zeigen keinen CPU-Gewinn. Endpoint-CPU-ms/neuem Frame:
+  r336 31,51 / r337 31,95, danach r337 40,30 / r336 36,50.
+  Die Aenderungen wurden gemeinsam zurueckgenommen; die genaue Ursache der
+  Streuung ist nicht belegt. Kein akzeptierter CPU-Performancefix.
+  Der private Microbuild-Prozess wurde dagegen verbessert und real verifiziert:
+  ohne veraltete Profil-Datei behaelt er exakt die vorhandene Compiler-Hotliste
+  bei. Baseline/Working-Quellen, Pack, 32 Quellhashes, Cache- und EXE-Identitaet,
+  Ninja-Budget und Linkaudit bleiben gebunden. r337 entstand so in 68,61 s,
+  ohne Analyse/Codegen und mit null AOT-Neucompiles.
+  r338 stellt anschliessend die unveraenderten Runtimequellen von e1d72c0
+  wieder her: 49,46 s Microbuild, null AOT-Neucompiles, normales Linkaudit,
+  bytegleiche generierte Quellen und Pack gegen r336. Produkt-SHA256:
+  2415e8853b9b1e4a0ac93886fa5bab5500a284885fb6d61d1b80526f9886036d.
+  Sichtbarer 60-s-Windy-Lauf mit Inputprofil 1 besteht ohne Capsule oder
+  Forced Stop: 22,92 Titelupdates/s, 143,24 Praesentationen/s, P95 60,12 ms;
+  staerkster persistenter Thread im Endpunktmittel 38,10 CPU-ms/neuem Frame.
+  Weiterhin kein stabiler CPU-Leistungspuffer und kein Originaltempo-/
+  Gesamtspielnachweis. Die Microbuild-Verkuerzung ist belegt; ein CPU-Gewinn
+  nicht. Private Evidence: `r337-dispatch-cpu-20260910a`,
+  `r338-sonic-action-stages-restored-runtime-20260910a`.
 - r336 erweitert den vorbereiteten Admission-Cache um ein getrenntes
   NativeBringup-Profil. Nur Provider-Implementierungsidentitaeten werden fuer
   dessen Semantikschluessel projiziert; aktuelle Source, exakte Archive,
