@@ -1,5 +1,29 @@
 # Aktueller Projektstand
 
+Stand: 10. September 2026, r347/0.49.9 inkrementell exportiert.
+94.056 ms Buildhelfer, 1 Adapter, 0 AOT-Compiles; Linkaudit bestanden,
+Pack unveraendert. EXE SHA-256:
+`c8d0432a5818a4ea86cd43ef61842851eb15a0e6461dca05d04cc6fae70c9749`.
+
+Der eigene r346-Replay reproduziert den neuen Super-Sonic-Crash exakt:
+PC, PR, alle GPR, Frame1465 und aktives Event stimmen mit der Nutzer-Capsule
+ueberein. Die Konsole belegt eine originale Eintrag-Aliasliste auf einen
+geladenen CHAOS_SURFACE-PVM-Descriptor; der bisherige Resolver suchte diese
+Autoritaet nur fuer die urspruengliche PVM-Liste. Der gemeinsame Resolver
+folgt nun auch fuer nicht-statische Aliaslisten dem ausgewaehlten, weiterhin
+vollstaendig geprueften physischen Descriptor. Die Capsule erhaelt auf diesem
+Fehlerpfad zusaetzlich Listenauswahl und Owner-/Registry-/PVM-Details.
+
+r347 hat mit identischem aufgezeichnetem Inputpraefix plus neutralem Tail
+die alte Fehlerstelle passiert und laeuft ueber Frame2099 weiter. Der Nutzer
+hat eigene sichtbare Super-Sonic-Tests freigegeben; der Save ist isoliert.
+Der Folgepfad bis zum Boss ist noch in Pruefung. Evidence:
+`private/diagnostics/r347-super-sonic-20260910a/reproduction-evidence.json`,
+`texture-review/review.md`, `microbuild/build-result.json` und
+`replay-r347-super-sonic-20260910a/game.stderr.log`.
+
+## Vorheriger Export r346
+
 Stand: 10. September 2026, r346/0.49.9 auf Nutzer-"build" als Mikrobuild
 exportiert. 0.5 folgt auf Nutzeranordnung erst nach Super Sonic und Polish.
 Buildhelfer: 73.715 ms, 1 Adapter-Compile, 0 AOT-Compiles; Linkaudit bestanden.

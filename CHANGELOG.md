@@ -4,6 +4,15 @@
 
 ### Geaendert
 
+- r347/0.49.9 repariert die Texturbindung originaler Eintrag-Aliasse:
+  eine separate TEXLIST darf den vorhandenen, vollstaendig validierten
+  physischen PVM-Descriptor verwenden. Exakte TextureSet-Prioritaet und
+  Besitz-/Payload-/Generationspruefungen bleiben erhalten. Fehler-Capsules
+  enthalten nun auch die tatsaechliche Basic-Texturauswahl samt SDK-Zeile.
+  Der r346-Super-Sonic-Stop wurde exakt reproduziert und von r347 passiert.
+  Mikrobuild 94.056 ms, 1 Adapter, 0 AOT-Compiles; Linkaudit bestanden.
+  Der weitergehende Storytest bis zum Boss laeuft noch.
+
 - Naechste Entwicklungsversion 0.49.9 nach dem bestaetigten Abschluss aller
   sechs regulaeren Stories. 0.5 folgt erst nach Super Sonic und Polish.
   Als r346 auf Nutzer-"build" inkrementell exportiert.

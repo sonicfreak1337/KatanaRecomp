@@ -7,6 +7,18 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (10. September 2026)
 
+- r347/0.49.9 ist als Mikrobuild exportiert: 94.056 ms, 1 Adapter,
+  0 AOT-Compiles, Linkaudit bestanden. Der exakte r346-Crash wurde vorher
+  mit isoliertem Save reproduziert; r347 passiert denselben Frame1465.
+  Super-Sonic-Folgepfadtest laeuft mit unveraendertem Inputpraefix und
+  neutralem Tail weiter. Lokal committen, kein Push.
+
+- Nach dem neuen r346-Crash gibt der Nutzer die autonome Reparatur und
+  eigene Super-Sonic-Storytests frei: bis zum Boss laufen nur Cutscenes.
+  Gezielte sichtbare Laeufe mit isolierter Kopie des Spielstands und
+  Logaufzeichnung statt Vollmatrix; passende inkrementelle Reparaturbuilds
+  im bestehenden Produktpfad, danach lokal committen, niemals pushen.
+
 - Auf Nutzer-"build" ist r346/0.49.9 als Mikrobuild exportiert: PVM-
   Publikationsfix und Versionslabel, 73.715 ms Buildhelfer, 1 Adapter,
   0 AOT-Compiles, bytegleicher Pack, Linkaudit bestanden. Jetzt lokaler
