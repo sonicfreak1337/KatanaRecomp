@@ -4,6 +4,15 @@
 
 ### Geaendert
 
+- r349/0.49.9 erweitert die geprueften Objekt- und Folgefamilien des
+  zerstoerten Station Square um 14 Funktionswurzeln einschliesslich
+  Darstellung, Aufraeumen und weiterer Task-Initialisierung. Daraus entstehen
+  482 weitere B_CHAOS7-Blockeinstiege; alle bisherigen Module und Einstiege
+  bleiben erhalten. Vier AOT-Dateien neu kompiliert, Linkaudit bestanden.
+  Die CLI-Versionspruefung erfolgt nun vor der teuren Exportanalyse.
+  Erfolgreicher Wrapper 7:06 Minuten; mit Versions-/Provenance-Reparatur
+  ca. 20:27 Minuten bis Abnahme, kein Kaltwert. Gameplaypruefung beim Nutzer.
+
 - r348/0.49.9 korrigiert die gemeinsame TIKAL-Texturliste beim Super-Sonic-
   Eventwechsel: bewiesener aktiver TextureSet-Besitz bleibt auch dann erhalten,
   wenn die Liste in einem geladenen Datenmodul liegt. Wiederholtes Named-Laden,

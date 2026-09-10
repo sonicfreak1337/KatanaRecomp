@@ -7,6 +7,20 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (10. September 2026)
 
+- Der r348-Nutzercrash liegt im zerstoerten Station Square, B_CHAOS7.
+  Auf ausdruecklichen Auftrag wurden der Bereich und seine bekannten
+  Folgefamilien geprueft: r349/0.49.9 enthaelt 14 weitere Funktionswurzeln
+  einschliesslich Display/Cleanup und verschachtelter Task-Initialisierung.
+  482 weitere Blockeinstiege; alle 249 Module und 722249 bisherigen
+  Moduleinstiege bleiben erhalten. Inkrementeller Compile: 4 AOT-Dateien,
+  Linkaudit bestanden. Erfolgreicher Exportkern 380.047 ms, Wrapper 425.936 ms.
+  Wegen veralteter CLI-Version und anschliessender Provenance-Erneuerung
+  insgesamt ca. 20:27 Minuten ab erstem Exportstart bis Artefaktabnahme;
+  das verfehlt das Zehn-Minuten-Ziel und ist keine Kaltmessung. Der Wrapper
+  prueft die CLI-Version jetzt vor der teuren Analyse. Keine eigenen
+  Spieltests, Replays oder Eingaben; der Nutzer behaelt die Steuerung.
+  Gameplay im reparierten Bereich ist noch offen. Lokal committen, kein Push.
+
 - Der Nutzer hat die Replaysteuerung zurueckgenommen und testet wieder selbst.
   Keine weiteren Replays oder automatischen Eingaben. Der normale r347-Lauf
   bestaetigt denselben TIKAL-Owner-Stop. r348/0.49.9 ist unter der aktuellen

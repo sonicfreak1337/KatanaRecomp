@@ -1,5 +1,38 @@
 # Aktueller Projektstand
 
+Stand: 10. September 2026, r349/0.49.9 inkrementell exportiert.
+Vier AOT-Dateien kompiliert, Linkaudit bestanden. EXE SHA-256:
+`6748db0745fd7894b6fdd0ff23b841bb1dd1777a04578c0cdfb65781a3b331ad`.
+
+Der normale r348-Nutzerlauf stoppt im zerstoerten Station Square bei einer
+fehlenden Task-Update-Funktion in B_CHAOS7. Die Bereichspruefung schliesst
+drei verwandte Update-Wrapper mit ihren lokalen Helfern und einer weiteren
+Task-Initialisierung sowie zwei Objektfamilien mit je Display/Cleanup ein.
+14 explizite Funktionswurzeln liefern 482 weitere Blockeinstiege: B_CHAOS7
+steigt von 6003 auf 6485. Alle 249 Modulidentitaeten, ihre Quellbindungen und
+alle 722249 bisherigen Moduleinstiege bleiben im ausgelieferten Produkt.
+Die 205 bisherigen globalen Roots und 26 weiteren Seeddateien sind erhalten.
+Bekannte 35 Task-Ziele und 38 unterschiedliche Zustandszweige waren bereits
+vorhanden. Quellgebundene Candidate-Erweiterung; kein universeller Beweis
+fuer beliebig berechnete Ziele und keine pauschale Strict-Promotion.
+
+Der erste Export scheiterte vor dem Compile am CLI-Vertrag 0.49.8 gegen
+Runtime 0.49.9. Die CLI wurde aktuell gebaut, ihre Disassembly-Provenance
+erneuert; der Coverage-Payload ist bytegleich. Eine neue fruehe Versions-
+pruefung verhindert denselben spaeten Konflikt. Der erfolgreiche Lauf nutzt
+den Analyse-Cache und den bestehenden Buildbaum: 380.047 ms Exportkern,
+425.936 ms kompletter warmer Wrapper. Einschliesslich Fehlversuch und
+Reparatur ca. 20:27 Minuten vom ersten Exportlog bis zur Artefaktabnahme.
+Das Zehn-Minuten-Ziel wurde insgesamt verfehlt; kein Kaltbuildnachweis.
+
+Keine eigenen Spieltests, Replays oder automatischen Eingaben. Der Nutzer
+behaelt die Steuerung; der weitere Super-Sonic-Fortschritt bleibt im Spiel
+zu bestaetigen. Keine neue FPS-Messung. Evidence:
+`private/diagnostics/r349-chaos7-20260910a/review.md`, `build-result.json`,
+`export-retry2.stdout.log` und die neue source-bound Familien-Auditdatei.
+
+## Vorheriger Export r348
+
 Stand: 10. September 2026, r348/0.49.9 inkrementell exportiert.
 70.156 ms gesamter warmer Wrapper, 62.987 ms Buildhelfer, 1 Adapter,
 0 AOT-Compiles, Linkaudit bestanden. Pack und generierte Quellen unveraendert.
