@@ -1,5 +1,29 @@
 # Aktueller Projektstand
 
+Stand: 10. September 2026, r345/0.49.8 inkrementell exportiert auf Nutzer-"go".
+Egg Vipers fehlende Zustands-Callback-Familie umfasst elf neue belegte Roots;
+194 bisherige Familienzeilen bleiben bytegleich (205 gesamt). Die benachbarten
+zwoelf ASCII-Zustandsnamen werden nicht als Code aufgenommen. Die 21 bereits
+vorbereiteten Chao-Race-Roots sind in diesem AOT-Batch ebenfalls enthalten.
+
+Ninja-Plan: 14 AOT-Compiles, Budget 32. Die Generierung verwendet 1098 von
+1112 Partitionen wieder. Exportkern 492.871 ms, gesamter warmer Wrapperaufruf
+laut Log-Dateizeiten etwa 8:31 Minuten; keine Kaltpfadmessung. Linkaudit besteht.
+Keine weiteren Zusatztests und kein Agenten-Spielstart. Boss-/Chao-Gameplay
+bleibt beim Nutzer. r344 hat Final Egg/Emblem-Freigabe bereits passiert und
+ist erst in Egg Viper an B_EGM3+8AB4 gestoppt. Light Speed Dash ist bestaetigt.
+
+Die begrenzte Quellpruefung erfasst elf Handler und 16 direkt aufgerufene lokale
+Helfer; zwei externe SDK-Ziele sind bereits kompiliert. Dies ist keine Aussage,
+dass der gesamte Boss oder Chao Race ohne weitere Stops durchspielbar ist.
+
+EXE SHA-256: `57aea41e65d385b040caba71e3add392f859eaad0b537a302099d9a0396fbde8`.
+Pack SHA-256: `9e7b16c74a08873e33923af5d289568f12191352bfab9a4e41e197d54f65574a`.
+Evidence: `private/diagnostics/r345-egg-viper-20260910a/build-result.json` und
+`export.stdout.log`. Lokal committen, nicht pushen.
+
+## Vorheriger Export r344
+
 Stand: 10. September 2026, r344/0.49.8 inkrementell exportiert.
 Der Nutzer hat den Batch nach dem einzigen neuen Sonic-Crash geschlossen.
 1 Adapter, 0 AOT-Compiles; 88.429 ms im Buildhelfer. Der gesamte Aufruf dauert

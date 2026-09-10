@@ -7,6 +7,25 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (9. September 2026)
 
+- Auf Nutzer-"go" ist r345/0.49.8 exportiert: elf Egg-Viper-Handler und
+  21 Chao-Race-Roots; 14 AOT-Compiles, 1098 Partitionen wiederverwendet,
+  Linkaudit bestanden. 492.871 ms Exportkern, ca. 8:31 Minuten ganzer
+  warmer Aufruf. Keine Zusatztests oder Agenten-Spielstarts. Jetzt lokal
+  committen, nicht pushen; der Nutzer testet selbst.
+
+- Nach der r345-Quellvorbereitung beanstandet der Nutzer zu viele Tests.
+  Keine weiteren Zusatztests, Coverage-Verifier oder Wiederholungsreviews
+  fuer diesen Batch. Der bereits bestandene Input-Preflight wird nicht nur
+  zur Beschaeftigung wiederholt. Naechster Produktschritt ist der einzelne
+  inkrementelle Export nach Batchfreigabe, dann Nutzer-Spielpruefung und
+  lokaler Commit. Keine Agenten-Spielstarts; kein Push.
+
+- Der anschliessende r344-Nutzerlauf erreicht Egg Viper nach Final Egg.
+  Neuer Stop: B_EGM3 fehlender Einsprung 8AB4; Quellbatch r345 ergaenzt
+  elf belegte Tabellenhandler, nicht die danebenliegenden Zustandsnamen.
+  Integrierter Input-Preflight bestanden, noch kein Produktexport. Nutzer
+  uebernimmt weiter Spieltests; neue Crashmeldung ist kein Exportsignal.
+
 - Am 10. September schliesst der Nutzer r343 nach dem einzigen neuen Crash
   nach Final Egg. r344/0.49.8 ist als Mikrobuild exportiert: 88.429 ms im
   Buildhelfer, ca. 96 Sekunden gesamter warmer Aufruf, 1 Adapter, 0 AOT-

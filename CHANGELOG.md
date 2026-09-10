@@ -4,6 +4,13 @@
 
 ### Geaendert
 
+- r345/0.49.8 ergaenzt die elf belegten Egg-Viper-Zustandshandler und die
+  21 vorbereiteten Chao-Race-Einstiege. ASCII-Zustandsnamen neben der
+  Boss-Tabelle bleiben Daten; 194 bestehende Callback-Zeilen bleiben
+  erhalten. Inkrementeller Export mit 14 AOT-Compiles, 1098 wiederverwendeten
+  Partitionen und bestandenem Linkaudit: ca. 8:31 Minuten gesamter Warmaufruf.
+  Keine weiteren Zusatztests; der Nutzer prueft das Spiel.
+
 - r344/0.49.8 korrigiert den Stop beim Aufraeumen der Emblem-Anzeige nach
   Final Egg: Null-TEXNAME-Eintraege folgen dem belegten Original-/Flycast-
   No-op; gueltige Referenzen werden regulaer freigegeben. Begrenzte
