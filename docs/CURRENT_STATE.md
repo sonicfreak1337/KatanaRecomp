@@ -11,6 +11,20 @@ Die statische Delta-Nachpruefung bleibt eingeschraenkt. Historische Runs und
 Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
 Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
 
+## Neue Messbasis fuer den CPU-Engpass (r338)
+
+Der native Start aus einem exakt gebundenen Windy-Valley-Quicksave mit
+synthetischem Input-Replay ist verifiziert. Zwei isolierte Laeufe desselben
+Zustands lieferten 1199 beziehungsweise 1223 Spielframes in je rund 61 Sekunden
+inklusive Start und Laden. Der heisseste persistente Thread belegte nach der
+Startphase etwa 95.5-96.5 Prozent eines CPU-Kerns. Das ist keine neue
+Performanceverbesserung und kein festes 60-Sekunden-Fenster nach dem Load.
+Ein zusaetzlicher Lauf bestaetigt Vorwaertssteuerung und liefert ein aktuelles
+IP-Profil: FPU, Speicher-/Ownerpruefungen und Buchfuehrung pro Gastinstruktion
+bleiben relevante Kosten. Quicksave, Replay, EXE und kopierte Linkmap sind
+privat mit ihren Identitaeten gebunden; kein neuer Produktexport war noetig.
+Details: `private/diagnostics/r338-state-performance-20260910a/review.md`.
+
 ## Produktziel und Grenzen
 
 Katana erzeugt statisch rekompilierte native PC-Ports. Der Produktpfad
