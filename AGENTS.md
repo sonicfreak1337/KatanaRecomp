@@ -7,6 +7,14 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (10. September 2026)
 
+- Der Nutzer bestaetigt nach r351: "uuuund wir sind story complete!"
+  Damit sind Sonic, Tails, Knuckles, Amy, Big, Gamma und Super Sonic durch
+  Nutzerlaeufe abgeschlossen. Der Transformations-/Finalpfad ist jetzt im
+  Spiel bestaetigt. Version bleibt 0.49.9; 0.5 folgt wie angeordnet nach
+  Super Sonic UND Polish. Chao und weitere Polish-/Performancearbeit bleiben
+  gesondert zu behandeln. Meilenstein dokumentieren und lokal committen;
+  diese Erfolgsmeldung erfordert keinen neuen Export oder eigenen Spieltest.
+
 - Der r350-Nutzerlauf erreicht die Super-Sonic-Transformation und stoppt
   dort an einem fehlenden B_CHAOS7-Effektinitialisierer. r351/0.49.9
   ergaenzt die vier verwandten Primary-registrierten Initialisierer samt

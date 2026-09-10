@@ -4,6 +4,11 @@
 
 ### Geaendert
 
+- Der Nutzer bestaetigt in r351/0.49.9 auch Super Sonic als abgeschlossen.
+  Damit sind alle sieben Stories durch Nutzerlaeufe beendet: Sonic, Tails,
+  Knuckles, Amy, Big, Gamma und Super Sonic. Der Story-Meilenstein ist
+  erreicht; 0.5 folgt nach dem noch ausstehenden Polish.
+
 - r351/0.49.9 ergaenzt den bei der Super-Sonic-Transformation fehlenden
   Effektinitialisierer zusammen mit drei verwandten Initialisierern und
   deren Update-, Darstellungs- und Aufraeumfunktionen. 13 neue Roots,

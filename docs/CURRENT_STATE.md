@@ -1,6 +1,15 @@
 # Aktueller Projektstand
 
-Stand: 10. September 2026, r351/0.49.9 inkrementell exportiert.
+Stand: 10. September 2026, r351/0.49.9: alle sieben Stories abgeschlossen.
+Der Nutzer bestaetigt nach seinem Super-Sonic-Lauf: "uuuund wir sind story
+complete!" Sonic, Tails, Knuckles, Amy, Big, Gamma und Super Sonic sind damit
+durch Nutzerlaeufe abgeschlossen. Der reparierte Transformations-/Finalpfad
+ist im Spiel bestaetigt. Version bleibt 0.49.9; 0.5 folgt wie vereinbart
+nach Storyabschluss und Polish. Chao und weitere Grafik-/Performancearbeit
+bleiben eigene offene Bereiche. Kein neuer Export oder eigener Spieltest
+fuer diese Meilensteindokumentation.
+
+Der bestaetigte r351-Build wurde inkrementell exportiert.
 Drei AOT-Dateien kompiliert, 1111 Quellpartitionen wiederverwendet,
 Linkaudit bestanden. EXE SHA-256:
 `4fb01348d201ca3012308e76605d9a071ea5e6dbb46579d3f8524d2cbd1768e6`.
@@ -24,9 +33,8 @@ keine pauschale Strict-Promotion oder universelle Modulvollstaendigkeit.
 
 Ein Export im vorhandenen Performance-Buildbaum: 469.299 ms Exportkern,
 487.292 ms kompletter warmer Wrapper (8:07 Minuten), kein Kaltwert.
-Keine eigenen Spielstarts, Replays oder Eingaben. Nutzer bestaetigt den
-reparierten Transformationspfad und weiteren Super-Sonic-Fortschritt erst
-im folgenden Spieltest. Evidence:
+Keine eigenen Spielstarts, Replays oder Eingaben. Der anschliessende
+Nutzertest bestaetigt den Super-Sonic- und gesamten Storyabschluss. Evidence:
 `private/diagnostics/r351-super-transform-20260910a/review.md`,
 `build-result.json`, `export.stdout.log` und
 `private/analysis/sonic-adventure-pal-v1003/r351-super-transform-family-v1/super-transform-family-audit.json`.
