@@ -4,6 +4,14 @@
 
 ### Geaendert
 
+- r341/0.49.8 repariert den neuen Chao-Texture-Flagstop, die unnoetige
+  Normalenvalidierung unbeleuchteter Final-Egg-Effekte und den SDK-Farbpfad
+  des Light Speed Dash. Originale SDK-Lichtvorbereitung und TA-Farbquantisierung
+  ersetzen dort die fremde TitleBasic-Palettenberechnung. Neun gezielte
+  Komponentenfaelle und Linkaudit bestehen; Nutzer-Spieltest noch ausstehend.
+  Mikrobuild: 91.437 ms im Produkthelfer, 1 Adapter- und 0 AOT-Compiles,
+  vorhandene Analyse/Pack/Eintrittspunkte vollstaendig erhalten.
+
 - Entwicklungsversion 0.49.8 ist als r340 exportiert: Der Nutzer bestaetigt
   Gamma und Knuckles zu 100 Prozent in r339/0.49.6. Damit sind Tails, Big,
   Amy, Gamma und Knuckles durchgespielt. Der kurzzeitig geplante Bump 0.49.7

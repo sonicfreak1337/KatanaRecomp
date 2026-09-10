@@ -7,6 +7,13 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (9. September 2026)
 
+- Am 10. September schliesst der Nutzer den r340-Batch mit neuem Sonic-
+  und Chao-Crash sowie weiterhin falschem Light-Speed-Dash-Effekt. Auf
+  "ok build jetzt" wurde r341/0.49.8 als Mikrobuild exportiert: 1 Adapter,
+  0 AOT-Dateien, alter Pack bytegleich, Linkaudit bestanden. Die drei Fixes
+  sind enthalten, Spielbestaetigung steht aus. Der Nutzer testet selbst;
+  keine Agenten-Spielstarts. Nach dem Build lokal committen, nicht pushen.
+
 - Am 10. September bestaetigt der Nutzer Gamma und Knuckles Story zu 100 Prozent in
   r339/0.49.6. Der naechste Export erhaelt 0.49.8; der zuvor vorgesehene
   Gamma-Bump 0.49.7 wurde noch nicht exportiert. Der Nutzer hat den Batch

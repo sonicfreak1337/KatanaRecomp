@@ -1,5 +1,27 @@
 # Aktueller Projektstand
 
+Stand: 10. September 2026, r341/0.49.8 inkrementell exportiert.
+Der Nutzer hat den r340-Batch geschlossen und den Build ausdruecklich gestartet.
+Chao: die native Texture-Pruefung akzeptiert nun die originale gefuellte
+Flagfamilie einschliesslich 0x80000060. Sonic Final Egg: unbeleuchtete Modelle
+ohne Environment Mapping lesen keine unbenutzten Normalen mehr; beleuchtete
+und Environment-Verbraucher behalten ihre Validierung. Der SDK-Dash-Pfad
+6214FA verwendet seine originale Lichtvorbereitung und Float-Farbquantisierung;
+TitleBasic, ResidentLegacy und der andere SDK-Owner 638D72 behalten ihre
+Farbpfade. Neun gezielte numerische FPU-/Farbchecks und Adapter-Syntaxpruefung
+bestehen. Die sichtbare Dash-Korrektur und beide Crashpunkte sind noch nicht
+im Spiel bestaetigt; der Nutzer uebernimmt die Tests. Keine eigenen Spielstarts.
+Mikrobuild 91.437 ms einschliesslich Retained-Validierung/Kopie, jedoch ohne
+vorgelagerten Runtime-Refresh; genau 1 Adapter-Compile, 0 AOT-Compiles.
+Linkaudit bestanden. Alle generierten Quellen und der AOT-Pack bleiben
+bytegleich zu r340. Version bleibt 0.49.8; Sonic und Super Sonic sind offen.
+EXE SHA-256: `bf2bb7451afe25979f4f1b0e93731d01cda17873611c24dc0d1d584cc3d734c1`.
+Packdatei SHA-256: `3ccc5a45aeef59a4c58e05e686a0548273ec9f8fed194b3aca84213dd87211f3`.
+Evidence: `private/diagnostics/r341-light-dash-material-20260910a/review.md`
+und `microbuild/build-result.json`. Saves wurden nicht restauriert/kopiert.
+
+## Vorheriger Export r340
+
 Stand: 10. September 2026, r340/0.49.8 exportiert, Linkaudit bestanden.
 Tails, Big, Amy, Gamma und Knuckles sind vom Nutzer vollstaendig durchgespielt.
 Chao: 79 neue quellgebundene Einsprungstellen, 95 inklusive der 16 erhaltenen
