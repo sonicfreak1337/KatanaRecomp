@@ -7,6 +7,15 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (9. September 2026)
 
+- Der Nutzer hat den r330-Batch nach Knuckles und Amy nach Zero geschlossen.
+  Export ist nach den Crashfixes und den gemeldeten Grafikbugs einschliesslich
+  Credits freigegeben. Anschliessend folgt die ausdruecklich beauftragte
+  autonome Performancephase auf Basis von Grounders Empfehlungen mit neuen
+  Messungen und Pruefung des originalen Spieltimings. Eigene Spielstarts und
+  gezielte Tests sind waehrend seiner Abwesenheit wieder freigegeben; Saves
+  bleiben isoliert, Messungen ohne parallele Builds. Diese aktuelle Freigabe
+  ersetzt die aelteren Verbote von Agenten-Spieltests weiter unten.
+  Anschliessend lokal committen, niemals pushen. 0.49.5 markiert Big Story clear.
 - Der Nutzer hat r329 mit "go" und "du darfst bauen. moeglichst inkrementell"
   ausdruecklich freigegeben. Der vorbereitete Boss-/Uebergangsbatch inklusive
   Chaos 7 verwendet den bestehenden Performance-Buildbaum. Der r328-

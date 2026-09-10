@@ -1,7 +1,9 @@
 # Aktueller Projektstand
 
-Stand: 9. September 2026, r329/0.49.4 inkrementell exportiert;
-der Nutzer testet. Entwicklungsversion fuer den naechsten Export: 0.49.5.
+Stand: 10. September 2026, r331/0.49.5 inkrementell exportiert und drei
+gezielte sichtbare 60-Sekunden-Laeufe bestanden. Der r330-Starttest fand eine
+SDK-Texturwiederverwendungsregression; r331 korrigiert sie mit erhaltenem
+Analysecheckpoint. Die spaeten Storyuebergaenge und Credits bleiben offen.
 Die statische Delta-Nachpruefung bleibt eingeschraenkt. Historische Runs und
 Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
 Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
@@ -25,6 +27,36 @@ korrekten Bytebindung nicht als belegt. Die konfigurierte Frequenz wird nicht
 auf Verdacht veraendert.
 
 ## Belegter Fortschritt
+
+- r330 enthaelt die STG12-Callbackfamilie, den ausgelassenen Basic-Cull-Pfad,
+  korrigierte SDK-Materialsteuerung und Immediate-UI-Zustand, die vorhandenen
+  Ressourcen bei einer fehlenden MLT-Datei sowie geteilte SDK-Texturreferenzen.
+  Das sind Quellkorrekturen; die vier gemeldeten spaeten Storycrashes und
+  Credits-Grafik sind noch nicht durch einen erneuten Lauf bestaetigt.
+- Eigener sichtbarer r330-Test mit isolierten Saves und gesteuerter Bewegung:
+  Emerald Coast beendet 60 Sekunden ohne Capsule. Windy Valley und Amys Hot
+  Shelter stoppen beim Laden an derselben neuen Texturvertragsverletzung.
+  Eine bereits geladene SDK-Kennung kann in einem anderen Archiv andere PVRT-
+  Daten bezeichnen. Das Original behaelt im geladenen Type0-Pfad die vorhandene
+  Publikation und erhoeht ihren Referenzzaehler. r331 erhaelt deshalb deren
+  echten Payload, Besitzer und Generation; es etikettiert sie nicht als neue
+  Archivtextur um. Die Originaldaten bleiben unveraendert.
+- r331 besteht dieselben drei sichtbaren Laeufe ohne Capsule. Neue Baseline,
+  jeweils 60 Sekunden mit Inputprofil 1 und ohne gleichzeitigen Build:
+  Windy Valley 22,44 Sim-FPS / 142,75 Praesentationen pro Sekunde / P95 65,27 ms;
+  Emerald Coast 29,53 / 140,24 / 41,57 ms; Amy Hot Shelter 30,02 / 143,62 /
+  34,38 ms. Das Hot-Shelter-Ergebnis betrifft den Einstieg, nicht den spaeteren
+  vom Nutzer gemeldeten langsamen Abschnitt. Keine stabile-30-FPS-Abnahme.
+  Produkt-SHA256: c7b0bc62dcd6fea0ba7c5754c9e717874bdf15f27498e0d065d48909e583c3b2.
+  Der Hostbuild dauert 56,69 s bei drei neu kompilierten Einheiten. Der CLI-
+  Export dauert insgesamt 299,85 s; Wrapper-Vorpruefungen kommen hinzu.
+  Abdeckungsanalyse, Programmadmission und Codeausgabe laufen trotz
+  Analysecheckpoint erneut und bleiben ein konkreter Iterationsengpass.
+- Der echte Staffroll-Initialisierer fordert Release 1 an, der Recap-Pfad
+  Release 2. Der bisherige feste Hosttakt verliert diese Unterscheidung.
+  Originale Moduswahl, Hostkadenz und die davon getrennte 144-Hz-Ausgabe
+  werden im anschliessenden Timing-/Performancebatch behandelt. Kein globaler
+  60-Hz-Schalter und noch keine Behauptung einer behobenen Abspann-Synchronitaet.
 
 - Der Nutzer bestaetigt Bigs abgeschlossene Story in r329. Nach Tails ist
   dies die zweite bis zum Abspann durchgespielte Kampagne. Sein Screenshot
