@@ -7,6 +7,11 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (9. September 2026)
 
+- Der Nutzer bestaetigt in r345: "sonic story beendet." Alle sechs
+  regulaeren Stories sind damit durch Nutzerlaeufe abgeschlossen. Naechster
+  Story-Meilenstein ist Super Sonic; Chao bleibt separat offen. Daraus folgt
+  kein neuer Exportauftrag und kein Agenten-Spielstart. Version aktuell 0.49.8.
+
 - Auf Nutzer-"go" ist r345/0.49.8 exportiert: elf Egg-Viper-Handler und
   21 Chao-Race-Roots; 14 AOT-Compiles, 1098 Partitionen wiederverwendet,
   Linkaudit bestanden. 492.871 ms Exportkern, ca. 8:31 Minuten ganzer

@@ -1,6 +1,11 @@
 # Aktueller Projektstand
 
 Stand: 10. September 2026, r345/0.49.8 inkrementell exportiert auf Nutzer-"go".
+Der Nutzer bestaetigt anschliessend: "sonic story beendet." Damit sind Sonic,
+Tails, Knuckles, Amy, Big und Gamma Story clear durch Nutzertests bestaetigt.
+Offener Story-Meilenstein: Super Sonic. Chao Garden/Race bleiben separat offen;
+die Storymeldung beweist weder deren Abschluss noch alle Save-/Load-Pfade.
+
 Egg Vipers fehlende Zustands-Callback-Familie umfasst elf neue belegte Roots;
 194 bisherige Familienzeilen bleiben bytegleich (205 gesamt). Die benachbarten
 zwoelf ASCII-Zustandsnamen werden nicht als Code aufgenommen. Die 21 bereits
@@ -14,8 +19,8 @@ bleibt beim Nutzer. r344 hat Final Egg/Emblem-Freigabe bereits passiert und
 ist erst in Egg Viper an B_EGM3+8AB4 gestoppt. Light Speed Dash ist bestaetigt.
 
 Die begrenzte Quellpruefung erfasst elf Handler und 16 direkt aufgerufene lokale
-Helfer; zwei externe SDK-Ziele sind bereits kompiliert. Dies ist keine Aussage,
-dass der gesamte Boss oder Chao Race ohne weitere Stops durchspielbar ist.
+Helfer; zwei externe SDK-Ziele sind bereits kompiliert. Der anschliessende
+Nutzertest bestaetigt Sonics Storyabschluss; Chao Race ist noch unbestaetigt.
 
 EXE SHA-256: `57aea41e65d385b040caba71e3add392f859eaad0b537a302099d9a0396fbde8`.
 Pack SHA-256: `9e7b16c74a08873e33923af5d289568f12191352bfab9a4e41e197d54f65574a`.

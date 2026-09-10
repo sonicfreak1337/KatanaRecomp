@@ -4,6 +4,9 @@
 
 ### Geaendert
 
+- Der Nutzer bestaetigt Sonics Storyabschluss in r345. Damit sind alle sechs
+  regulaeren Kampagnen durch Nutzerlaeufe beendet; Super Sonic bleibt offen.
+
 - r345/0.49.8 ergaenzt die elf belegten Egg-Viper-Zustandshandler und die
   21 vorbereiteten Chao-Race-Einstiege. ASCII-Zustandsnamen neben der
   Boss-Tabelle bleiben Daten; 194 bestehende Callback-Zeilen bleiben
