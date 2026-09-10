@@ -1,10 +1,10 @@
 # Aktueller Projektstand
 
-Stand: 10. September 2026, r332/0.49.5 inkrementell exportiert und der neue
-Credits-Diagnoseeinstieg sichtbar ausgefuehrt. r331 hat drei gezielte
-sichtbare 60-Sekunden-Laeufe bestanden. Der r330-Starttest fand eine
-SDK-Texturwiederverwendungsregression; r331 korrigiert sie mit erhaltenem
-Analysecheckpoint. Die spaeten Storyuebergaenge und Credits bleiben offen.
+Stand: 10. September 2026, r333/0.49.5 inkrementell exportiert. Credits zeigen
+im sichtbaren Diagnosepfad wieder lesbare Namen/Rollen und die richtigen
+wechselnden Hintergrundbilder. Emerald Coast und Windy Valley bestehen
+je einen sichtbaren 60-Sekunden-Lauf mit Bewegung. Originaltiming, der
+vollstaendige Credits-Abschluss und die spaeten Storyuebergaenge bleiben offen.
 Die statische Delta-Nachpruefung bleibt eingeschraenkt. Historische Runs und
 Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
 Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
@@ -21,14 +21,32 @@ korrektes Originaltempo mit stabiler aktuell auf 30 Hz konfigurierter Simulation
 weniger CPU-Arbeit pro Titelupdate, unabhaengige 144-Hz-Praesentation, ein
 vollstaendiger Kaltexport unter zehn Minuten und kosteneffiziente Umsetzung.
 Bildwiederholungen zaehlen zur Praesentation, nicht als neue Simulationsbilder.
-Die originale Titelupdate-Frequenz bleibt offen. Die Timingpruefung vom
-9. September verwendete teilweise falsche Datei-Offsets fuer den Original-RAMdump;
-ihre Aussagen zum Anzeigeprofil und zur Hauptschleife gelten bis zur erneuten
-korrekten Bytebindung nicht als belegt. Die konfigurierte Frequenz wird nicht
-auf Verdacht veraendert.
+Die erneute Bytebindung belegt unterschiedliche originale Completion-Zahlen:
+Staffroll fordert einen VBlank-Slot, andere Pfade zwei. Der PAL-Konstruktor
+658500 waehlt das 625-Zeilen-Profil, die 525-Zeilen-Konstruktoren sind getrennt.
+Der aktuelle Host wendet unabhaengig davon seine festen 30 Hz an; das ist ein
+belegter Timingfehler. Seine Korrektur muss den aktiven Originalmodus und die
+tatsaechlichen Completion-Anforderungen erhalten. Der separate 604FF0-TMU-
+Pfad ist noch nicht ausreichend fuer eine Verhaltensaenderung geklaert.
 
 ## Belegter Fortschritt
 
+- r333 bindet SUMMARYs eigenstaendige `staffroll_txt`-Textur an den exakten
+  geladenen Modulbesitzer. Registrierte Live-PVM-Deskriptoren haben Vorrang
+  vor Bootstrap-Snapshots; letztere muessen auch die originale GBIX erfuellen.
+  Damit werden recycelte Registryzeilen nicht mehr als alte SEGA-Textur gelesen.
+  Zwei sichtbare Credits-Proben (60 s Diagnose, 40 s spaetere Bildaufnahmen)
+  zeigen lesbare Namen/Rollen und korrekte Bildwechsel, ohne erzwungenes
+  Prozessende. Sie pruefen nicht den vollstaendigen Abspann oder dessen Ende.
+  Die gemeinsame SUMMARY-Schriftbindung gilt fuer alle Charaktere; sichtbar
+  geprueft wurde hier Sonic. Keine Save-/Completion-Flags wurden gesetzt.
+  Zwei weitere 60-s-Laeufe mit Inputprofil 1, ohne parallelen Build, bestehen
+  ohne Capsule: Emerald Coast 29,56 Sim-FPS / 139,25 Present-FPS / P95 40,54 ms;
+  Windy Valley 23,99 / 139,05 / 62,40 ms. Das ist eine Regressionsprobe,
+  kein Nachweis stabiler 30 Hz oder eines isolierten Performancegewinns.
+  Produkt-SHA256: bfdc654c6df9f6b2470820e4230fae4dd3e32dbbfa93bd1c92403fc4a314cf04.
+  Vier neu kompilierte Einheiten, Hostbuild 45,61 s, CLI-Export 282,04 s;
+  Wrapper-Vorpruefungen kommen hinzu. Analyse-/AOT-Checkpoint wurde erhalten.
 - r332 ergaenzt einen gebundenen Credits-Diagnoseeinstieg ueber ADVERTISE-
   Cleanup und den originalen Main-State 20. Der sichtbare Lauf erreicht
   SUMMARY/Staffroll (State 21), spielt SONIC.ADX und endet am nativen
@@ -37,8 +55,8 @@ auf Verdacht veraendert.
   bei weiterhin etwa 33,3 ms pro Titelupdate; die Cadence ist noch falsch.
   Die Bilder zeigen eine alte Sega-Textur beziehungsweise eine hellblaue
   Flaeche statt korrekter Credits. Damit ist der Fehler reproduzierbar,
-  aber nicht behoben. Der Quellfix fuer recycelte Bootstrap-Texturzeilen
-  gehoert in den naechsten Batch. r332 kompiliert vier Einheiten neu.
+  im damaligen r332 noch nicht behoben. r333 korrigiert die Schriftbindung
+  und recycelte Bootstrap-Texturzeilen. r332 kompiliert vier Einheiten neu.
 - r330 enthaelt die STG12-Callbackfamilie, den ausgelassenen Basic-Cull-Pfad,
   korrigierte SDK-Materialsteuerung und Immediate-UI-Zustand, die vorhandenen
   Ressourcen bei einer fehlenden MLT-Datei sowie geteilte SDK-Texturreferenzen.
