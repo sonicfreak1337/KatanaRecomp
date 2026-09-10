@@ -4,11 +4,18 @@
 
 ### Geaendert
 
-- Entwicklungsversion 0.49.5: Der Nutzer bestaetigt Bigs abgeschlossene
-  Sonic-Adventure-Kampagne im nativen r329/0.49.4-Port. Zusammen mit Tails
-  sind damit zwei Kampagnen bis zum Abspann durchgespielt. Die zerlegte
-  Credits-Schrift bleibt ein offener Grafikfehler; die Versionserhoehung
-  behauptet weder dessen Behebung noch vollstaendige Spielabdeckung.
+- Privater Sonic-Reparaturbatch nach r338: zusaetzlicher Gamma-Boss-Callback,
+  originalgetreue konsumierte NINJA-Matrixausgaben und getrennte ungeladene
+  SDK-Texturfreigabepfade. Gezielte Komponentenpruefungen bestehen; die
+  betroffenen Storyuebergaenge sind noch nicht erneut im Spiel bestaetigt.
+  Fehlerkapseln enthalten zusaetzliche FPU-/Freigabedaten. Der gemeldete
+  Light-Speed-Dash-Farbfehler bleibt mit begrenzter Laufzeitdiagnose offen.
+
+- Entwicklungsversion 0.49.6: Der Nutzer bestaetigt Amys abgeschlossene
+  Sonic-Adventure-Kampagne und korrekt laufende Credits im nativen
+  r338/0.49.5-Port. Zusammen mit Tails und Big sind damit drei Kampagnen
+  durchgespielt. Der Versionsbump gilt ab Reparaturexport r339 und
+  behauptet keine vollstaendige Spiel- oder Grafikabdeckung.
 
 - Der Portexport trennt nun den unveraenderten `strict-product`-Pfad von
   einem ausdruecklich nicht releasefaehigen `native-bringup`-Profil. Ein

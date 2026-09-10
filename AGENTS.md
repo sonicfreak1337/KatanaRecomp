@@ -7,6 +7,20 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (9. September 2026)
 
+- Am 10. September bestaetigt der Nutzer Amy Story clear und korrekt
+  laufende Credits in r338/0.49.5. Die naechste Version wird 0.49.6.
+  Der Nutzer hat den r338-Batch nach Gamma-Boss, Knuckles und Sonic Final Egg
+  geschlossen. Der gebuendelte Reparaturexport 0.49.6 ist freigegeben;
+  Spieltests bleiben beim Nutzer. Keine eigenen Spielstarts. Die breite,
+  ungemessene Integer-Load-Codegenoptimierung bleibt im Performancebatch.
+  Beim r339-Export wurde das Ninja-v7-Log durch einen falschen alten
+  Ninja-Diagnoseaufruf verloren. Die echte r318-Sicherung plus natives
+  `ninja -t restat` restauriert Dateizeiten aus den vorhandenen Objekten;
+  alle 1781 echten Befehls-Hashes bleiben unveraendert. Der gepruefte Plan
+  benoetigt 136 AOT-Compiles wegen fehlender/geaenderter Logeintraege und
+  einer tatsaechlich geaenderten Partition. Nur fuer diese Wiederherstellung
+  gilt Budget 136; keine Logeintraege/Hashes erfinden. Nach erfolgreichem
+  Export das neue Log sichern. Normale Crashbatches bleiben bei Budget 32.
 - Der Nutzer hat den r330-Batch nach Knuckles und Amy nach Zero geschlossen.
   Export ist nach den Crashfixes und den gemeldeten Grafikbugs einschliesslich
   Credits freigegeben. Anschliessend folgt die ausdruecklich beauftragte

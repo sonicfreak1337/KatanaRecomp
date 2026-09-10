@@ -1,15 +1,66 @@
 # Aktueller Projektstand
 
-Stand: 10. September 2026, r338/0.49.5 inkrementell exportiert. Credits zeigen
+Stand: 10. September 2026, r339/0.49.6 exportiert und Linkaudit bestanden.
+Kein eigener Spielstart; die drei reparierten Storypfade sind noch nicht
+erneut im Spiel bestaetigt. Die zentralen Saves sind vor/nach Export SHA-gleich.
+EXE SHA-256: `a0ede55f39813c41d7ddbb6a73dc0dbc9b705ab94d4e9ca9b22462073a956f4c`.
+Packdatei SHA-256: `1b2b4d3d1a331239a22f05796e5a8c69aeb595d8fae74ed3e7800b4f74d85d4b`.
+Profil 47, 1.098 Partitionen; genau eine AOT-Quelldatei ist gegen r338 geaendert.
+Der letzte Exportversuch dauerte 112,536 s, davon 67,636 s Hostbuild. Dies ist
+weder die Gesamtdauer des Batches noch ein Kaltexportwert: eine veraltete
+Providerbindung, eine zusaetzliche alte Partitionsdatei und das versehentlich
+verlorene Ninja-Log erforderten vorherige Wiederherstellung. Nach nativem
+`restat` mit unveraenderten echten Befehls-Hashes mussten 136 AOT-Einheiten
+regulaer gebaut werden. Das neue echte Log ist gesichert; Standardbudget
+bleibt 32. Details und Artefaktbindungen stehen im privaten Batchreport.
+
+Die r338/0.49.5-Spieltests bestaetigen: Credits zeigen
 wieder lesbare Namen/Rollen und die richtigen wechselnden Hintergrundbilder.
 Die normale Framefamilie beruecksichtigt jetzt den aktiven Original-Videomodus
 und gemeinsam verbrauchte Completion-Slots. Emerald Coast und Windy Valley
 bestehen je einen sichtbaren 60-Sekunden-Lauf mit Bewegung. Nicht alle Timing-
-Owner, der vollstaendige Credits-Abschluss und spaete Storyuebergaenge sind
-damit abgenommen. Windy Valley hat weiterhin zu wenig CPU-Leistungspuffer.
+Owner und spaeten Storyuebergaenge sind damit abgenommen. Windy Valley hat
+weiterhin zu wenig CPU-Leistungspuffer.
+Am 10. September bestaetigt der Nutzer in r338 Amys abgeschlossene Story
+und korrekt laufende Credits. Nach Tails und Big ist dies die dritte
+durchgespielte Kampagne. Der Versionsbump auf 0.49.6 gilt ab r339;
+r338 bleibt unveraendert 0.49.5. Die aktuellen Testruns uebernimmt
+der Nutzer; kein Agent startet einen konkurrierenden Spieltest.
+Der anschliessend geschlossene r338-Crashbatch gibt den Reparaturexport frei.
+Diese Credits-Bestaetigung ersetzt nicht die Abnahme aller Kampagnenenden.
 Die statische Delta-Nachpruefung bleibt eingeschraenkt. Historische Runs und
 Zwischenstaende stehen in Git, `STATUS.md`, `TASKS.md` und `ROADMAP.md`.
 Private Produkt- und Laufmanifeste binden die genauen Artefaktidentitaeten.
+
+## Reparaturbatch nach r338
+
+Die drei neuen Nutzerkapseln sind getrennt ausgewertet. Gamma fehlt ein
+Callback aus der Partikelfactory des letzten Bossmoduls; die quellgebundene
+Pruefung aller elf Bossmodule ergaenzt einen Root und behaelt alle 193
+vorherigen Eintraege bei. Knuckles scheitert vor der NINJA-Transformation an
+der Hostmatrixpruefung. Die native Projektion und Normalmatrix verwenden
+jetzt nur die vom Original konsumierten FTRV-Ausgaben. Unbrauchbare echte
+Rasterdreiecke werden verworfen; gueltige, aber nicht abbildbare Geometrie
+bleibt ein typisierter Fehler. Die damalige Kapsel enthaelt kein XF und
+beweist daher nicht, welcher Matrixwert den konkreten Stop ausloeste.
+
+Sonic Final Egg scheitert an der SDK-Texturfreigabe fuer FINALEGG2, nicht
+an einem Draw- oder Descriptorlimit. Der native Freigabeplan bildet die
+separaten registrierten, aber ungeladenen Zeilen und SDK-Fehlerpfade ab.
+Ein validierter aktueller PVM-View bleibt zur Freigabe berechtigt, nachdem
+ein verdraengter Hostalias bereits eingesammelt wurde. Registrygrenzen,
+Zeilentypen und Transaktionsvorbilder bleiben validiert.
+
+Zwoelf Freigabe-Komponentenfaelle und der aus dem Adapter extrahierte
+Projektionscheck bestehen. Die erneuten Storylaeufe stehen aus.
+Der helle Light-Speed-Dash-Effekt bleibt offen: Der gepruefte SDK-Farbpfad
+entspricht dem Original. Ein begrenzter Mitschnitt protokolliert im
+naechsten Nutzerlauf bis zu 64 verschiedene additive Modell-/Meshpaare
+im konfigurierten Benutzerdatenverzeichnis als
+`sonic-additive-material-witness.log`, ohne Farben zu aendern. Beim normalen
+Windowsstart ist dies `%LOCALAPPDATA%/KatanaRecomp`.
+Die ungemessene breite Integer-Load-Codegenoptimierung bleibt zurueckgestellt.
+Private Quellevidence: `private/diagnostics/r339-user-story-crash-batch-20260910a/review.md`.
 
 ## Neue Messbasis fuer den CPU-Engpass (r338)
 

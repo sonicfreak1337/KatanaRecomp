@@ -1,13 +1,16 @@
 # KatanaRecomp
 
-**Aktuelle Entwicklungsversion: 0.49.5**
+**Aktuelle Entwicklungsversion: 0.49.6**
 
-Entwicklungsstand r329/0.49.4 ist exportiert; den Spieltest uebernimmt der Nutzer.
-Am 9. September 2026 bestaetigt er die beendete Big-Kampagne in r329,
-nach der Tails-Kampagne in r327. Die naechste Version wird deshalb 0.49.5.
-Die Credits-Schrift bleibt bei beiden Kampagnen fehlerhaft. Der Uebergang
-nach Bigs Abspann ist noch nicht separat bestaetigt. Diese Meilensteine sind
-keine Abnahme der anderen Kampagnen oder der gesamten Grafikpipeline.
+Entwicklungsstand r339/0.49.6 ist exportiert; die Spieltests uebernimmt
+der Nutzer. Der Batch repariert Gamma-Boss-Callback, NINJA-Projektion und
+SDK-Texturfreigabe; die zuvor gescheiterten Uebergaenge sind noch nicht erneut
+im Spiel bestaetigt. Der Light-Speed-Dash-Farbfehler bleibt mit Diagnose offen.
+Am 10. September 2026 bestaetigt der Nutzer in r338 Amys abgeschlossene Kampagne
+und korrekt laufende Credits. Nach Tails und Big sind damit drei Kampagnen
+durchgespielt. Deshalb erhaelt r339 Version 0.49.6; das bereits
+gebaute r338 bleibt 0.49.5. Diese Meilensteine sind keine Abnahme der anderen
+Kampagnen oder der gesamten Grafikpipeline.
 
 KatanaRecomp ist ein C++20-Framework fuer die statische Rekompilierung von
 Dreamcast-SH-4-Programmen in native PC-Ports. Das Projekt ist Pre-Alpha:
