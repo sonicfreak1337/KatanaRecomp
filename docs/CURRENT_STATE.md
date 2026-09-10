@@ -1,7 +1,8 @@
 # Aktueller Projektstand
 
-Stand: 10. September 2026, r331/0.49.5 inkrementell exportiert und drei
-gezielte sichtbare 60-Sekunden-Laeufe bestanden. Der r330-Starttest fand eine
+Stand: 10. September 2026, r332/0.49.5 inkrementell exportiert und der neue
+Credits-Diagnoseeinstieg sichtbar ausgefuehrt. r331 hat drei gezielte
+sichtbare 60-Sekunden-Laeufe bestanden. Der r330-Starttest fand eine
 SDK-Texturwiederverwendungsregression; r331 korrigiert sie mit erhaltenem
 Analysecheckpoint. Die spaeten Storyuebergaenge und Credits bleiben offen.
 Die statische Delta-Nachpruefung bleibt eingeschraenkt. Historische Runs und
@@ -28,6 +29,16 @@ auf Verdacht veraendert.
 
 ## Belegter Fortschritt
 
+- r332 ergaenzt einen gebundenen Credits-Diagnoseeinstieg ueber ADVERTISE-
+  Cleanup und den originalen Main-State 20. Der sichtbare Lauf erreicht
+  SUMMARY/Staffroll (State 21), spielt SONIC.ADX und endet am nativen
+  Zeitlimit ohne Crash oder erzwungenes Prozessende. Keine Save- oder
+  Completion-Flags werden gesetzt. Der Timing-Witness zeigt Release 1
+  bei weiterhin etwa 33,3 ms pro Titelupdate; die Cadence ist noch falsch.
+  Die Bilder zeigen eine alte Sega-Textur beziehungsweise eine hellblaue
+  Flaeche statt korrekter Credits. Damit ist der Fehler reproduzierbar,
+  aber nicht behoben. Der Quellfix fuer recycelte Bootstrap-Texturzeilen
+  gehoert in den naechsten Batch. r332 kompiliert vier Einheiten neu.
 - r330 enthaelt die STG12-Callbackfamilie, den ausgelassenen Basic-Cull-Pfad,
   korrigierte SDK-Materialsteuerung und Immediate-UI-Zustand, die vorhandenen
   Ressourcen bei einer fehlenden MLT-Datei sowie geteilte SDK-Texturreferenzen.
