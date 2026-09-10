@@ -1,5 +1,38 @@
 # Aktueller Projektstand
 
+Stand: 10. September 2026, r351/0.49.9 inkrementell exportiert.
+Drei AOT-Dateien kompiliert, 1111 Quellpartitionen wiederverwendet,
+Linkaudit bestanden. EXE SHA-256:
+`4fb01348d201ca3012308e76605d9a071ea5e6dbb46579d3f8524d2cbd1768e6`.
+
+Der r350-Nutzerlauf erreicht die Super-Sonic-Transformation und stoppt
+an einem fehlenden Effektinitialisierer in B_CHAOS7. Der Originalcode
+registriert vier zusammengehoerige Initialisierer an fuenf Primary-Aufrufen.
+Diese und ihre lokalen Folgefunktionen ergeben 13 neue Funktionswurzeln,
+einschliesslich Update, Darstellung und Aufraeumen. Die Capsule belegt den
+ersten Initialisierer und seine unveraenderten Originalbytes im Speicher.
+Kein Textur-, Shader- oder Runtimefix und kein Ueberspringen von Spielcode.
+
+Alle 13 neuen Roots und zehn Callback-Publikationen sind im fertigen Produkt
+nachgewiesen; 17 verschiedene Zielblockhashes stimmen mit den Originalbytes
+ueberein. B_CHAOS7 waechst von 7821 auf 8270 Einstiege (+449). Alle 249
+Modulidentitaeten, Quellbindungen und alle 724067 bisherigen Moduleinstiege
+bleiben erhalten. Globaler Seed260 -> 273 mit bytegleichem Praefix;
+die anderen26 Seedpfade bleiben unveraendert. Modell- und Work-Datenzeiger
+werden nicht als Task-Funktionen behandelt. Quellgebundene Candidate-Familie,
+keine pauschale Strict-Promotion oder universelle Modulvollstaendigkeit.
+
+Ein Export im vorhandenen Performance-Buildbaum: 469.299 ms Exportkern,
+487.292 ms kompletter warmer Wrapper (8:07 Minuten), kein Kaltwert.
+Keine eigenen Spielstarts, Replays oder Eingaben. Nutzer bestaetigt den
+reparierten Transformationspfad und weiteren Super-Sonic-Fortschritt erst
+im folgenden Spieltest. Evidence:
+`private/diagnostics/r351-super-transform-20260910a/review.md`,
+`build-result.json`, `export.stdout.log` und
+`private/analysis/sonic-adventure-pal-v1003/r351-super-transform-family-v1/super-transform-family-audit.json`.
+
+## Vorheriger Export r350
+
 Stand: 10. September 2026, r350/0.49.9 inkrementell exportiert.
 Drei AOT-Dateien kompiliert, 1111 Quellpartitionen wiederverwendet,
 Linkaudit bestanden. EXE SHA-256:

@@ -7,6 +7,17 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (10. September 2026)
 
+- Der r350-Nutzerlauf erreicht die Super-Sonic-Transformation und stoppt
+  dort an einem fehlenden B_CHAOS7-Effektinitialisierer. r351/0.49.9
+  ergaenzt die vier verwandten Primary-registrierten Initialisierer samt
+  lokalen Folgefunktionen: 13 neue Roots, 449 weitere Blockeinstiege.
+  Alle 13 Roots und zehn Callback-Publikationen sind im Produkt enthalten;
+  alle 249 Module, Quellbindungen und 724067 bisherigen Moduleinstiege
+  bleiben erhalten. Drei AOT-Dateien kompiliert, 1111 Quellpartitionen
+  wiederverwendet, Linkaudit bestanden. Exportkern 469.299 ms, ganzer
+  warmer Wrapper 487.292 ms. Kein eigener Spielstart oder Replay;
+  Nutzer behaelt die Steuerung. Gameplaybestaetigung offen. Lokal committen.
+
 - Der anschliessende r349-Nutzercrash trifft in B_CHAOS7 die braune
   Gebaeudefamilie. Der vorherige Bereichsscan hatte die separate ObjectList
   mit 37 Eintraegen zu je 0x14 Bytes nicht erfasst. r350/0.49.9 ergaenzt
