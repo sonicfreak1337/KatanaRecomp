@@ -1012,6 +1012,22 @@ read_static_persistent_pointer_sink(Reader& input) {
     return {input.u32(), input.u8()};
 }
 
+void write_persistent_field_copy(
+    Writer& output, const katana::analysis::PersistentFieldCopyContract& value) {
+    output.u32(value.function_address);
+    output.u32(value.load_instruction_address);
+    output.u32(value.store_instruction_address);
+    output.u32(static_cast<std::uint32_t>(value.displacement));
+    output.u8(value.argument);
+    output.u8(value.width);
+}
+
+[[nodiscard]] katana::analysis::PersistentFieldCopyContract
+read_persistent_field_copy(Reader& input) {
+    return {input.u32(), input.u32(), input.u32(),
+            static_cast<std::int32_t>(input.u32()), input.u8(), input.u8()};
+}
+
 void write_static_callback_field_sink(
     Writer& output,
     const katana::analysis::StaticCallbackFieldSinkContract& value) {
@@ -1022,6 +1038,7 @@ void write_static_callback_field_sink(
     output.u8(value.width);
     output.boolean(value.call);
     output.u8(value.receiver_argument_mask);
+    output.u8(value.base_argument_mask);
 }
 
 [[nodiscard]] katana::analysis::StaticCallbackFieldSinkContract
@@ -1034,6 +1051,7 @@ read_static_callback_field_sink(Reader& input) {
     value.width = input.u8();
     value.call = input.boolean();
     value.receiver_argument_mask = input.u8();
+    value.base_argument_mask = input.u8();
     return value;
 }
 
@@ -1053,6 +1071,8 @@ void write_static_callback_record_table(
     output.u8(static_cast<std::uint8_t>(value.source_kind));
     output.u8(value.table_argument);
     output.u32(value.vector_address);
+    output.u32(value.resident_cell_address);
+    output.u32(value.resident_target_address);
 }
 
 [[nodiscard]] katana::analysis::StaticCallbackRecordTableContract
@@ -1072,10 +1092,15 @@ read_static_callback_record_table(Reader& input) {
     value.source_kind = static_cast<katana::analysis::CallbackRecordTableSource>(input.u8());
     value.table_argument = input.u8();
     value.vector_address = input.u32();
+    value.resident_cell_address = input.u32();
+    value.resident_target_address = input.u32();
     if (!katana::analysis::valid_callback_table_source(
             value.source_kind, value.table_argument,
             value.header_table_pointer_displacement,
-            value.vector_address)) throw CodecError();
+            value.vector_address, value.resident_cell_address,
+            value.resident_target_address, value.record_stride)) throw CodecError();
+    if (value.source_kind == katana::analysis::CallbackRecordTableSource::ResidentCallbackCell &&
+        value.callback_displacement != 0) throw CodecError();
     return value;
 }
 
@@ -1123,6 +1148,8 @@ read_static_callback_record_table(Reader& input) {
         output,
         artifact.analysis.static_callback_field_sinks,
         write_static_callback_field_sink);
+    write_vector(output, artifact.analysis.static_persistent_field_copies,
+                 write_persistent_field_copy);
     write_vector(
         output,
         artifact.analysis.static_callback_record_tables,
@@ -1183,6 +1210,8 @@ read_static_callback_record_table(Reader& input) {
     artifact.analysis.static_callback_field_sinks =
         read_vector<katana::analysis::StaticCallbackFieldSinkContract>(
             input, read_static_callback_field_sink);
+    artifact.analysis.static_persistent_field_copies =
+        read_vector<katana::analysis::PersistentFieldCopyContract>(input, read_persistent_field_copy);
     artifact.analysis.static_callback_record_tables =
         read_vector<katana::analysis::StaticCallbackRecordTableContract>(
             input, read_static_callback_record_table);

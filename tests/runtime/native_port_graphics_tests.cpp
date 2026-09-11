@@ -1,4 +1,5 @@
 #include "katana/runtime/native_port_graphics.hpp"
+#include "../../src/runtime/native_port_ui_texture_edges.hpp"
 #include "katana/runtime/native_port_telemetry.hpp"
 
 #include <array>
@@ -27,6 +28,61 @@ void require(const bool value, const std::string& message) {
     if (value) return;
     std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n';
     std::exit(EXIT_FAILURE);
+}
+
+void require_ui_texture_edges() {
+    using namespace katana::runtime;
+    std::array<NativePortVertex, 4u> source{};
+    source[0].texture_coordinate = {0.0f, 0.0f};
+    source[1].texture_coordinate = {1.0f, 0.0f};
+    source[2].texture_coordinate = {0.0f, 1.0f};
+    source[3].texture_coordinate = {1.0f, 1.0f};
+    for (auto& vertex : source) vertex.depth_coordinate = 1.0f;
+    NativePortDrawPacket packet;
+    packet.vertices = source;
+    packet.texture = NativePortTextureHandle{1u};
+    packet.texture_stage = NativePortTextureStage::RequiredResolved;
+    packet.topology = NativePortPrimitiveTopology::TriangleStrip;
+    packet.viewport = NativePortViewportTarget::Ui;
+    packet.batch.semantic = NativePortDrawBatchClass::UiOverlay;
+    packet.vertex_space = NativePortVertexSpace::PvrScreenReciprocal;
+    packet.depth_mapping.mode = NativePortDepthCoordinateMode::ReciprocalPositive;
+    std::array<NativePortVertex, 4u> prepared{};
+    const auto prepare = [&](const std::uint32_t height = 1080u) {
+        return detail::prepare_ui_texture_edges(packet, {256u, 256u}, height, prepared);
+    };
+    for (const float upper : {1.0f, 255.0f / 256.0f}) {
+        source[1].texture_coordinate[0] = upper;
+        source[2].texture_coordinate[1] = upper;
+        source[3].texture_coordinate = {upper, upper};
+        require(prepare(), "Full-texture UI endpoints were not contracted.");
+        require(prepared[0].texture_coordinate == std::array<float, 2u>{0.5f / 256.0f, 0.5f / 256.0f} &&
+                    prepared[3].texture_coordinate == std::array<float, 2u>{255.5f / 256.0f, 255.5f / 256.0f},
+                "UI edge contraction differs from Flycast endpoints.");
+        require(source[3].texture_coordinate[0] == upper &&
+                    prepared[3].position == source[3].position &&
+                    prepared[3].depth_coordinate == source[3].depth_coordinate,
+                "UI edge preparation changed source geometry or depth.");
+    }
+    const auto rejected = [&](const bool accepted) {
+        require(!accepted && prepared[0].depth_coordinate == 123.0f,
+                "Ineligible UI draw changed the scratch buffer.");
+    };
+    prepared[0].depth_coordinate = 123.0f;
+    rejected(prepare(480u));
+    source[3].texture_coordinate[0] = 0.5f;
+    rejected(prepare());
+    source[3].texture_coordinate[0] = 0.995f;
+    rejected(prepare());
+    source[3].texture_coordinate[0] = 1.0f;
+    source[3].depth_coordinate = 2.0f;
+    rejected(prepare());
+    source[3].depth_coordinate = 1.0f;
+    packet.batch.semantic = NativePortDrawBatchClass::Scene3D;
+    rejected(prepare());
+    packet.batch.semantic = NativePortDrawBatchClass::UiOverlay;
+    packet.material.bump_mapping = true;
+    rejected(prepare());
 }
 
 void require_graphics_telemetry(
@@ -1286,6 +1342,9 @@ void run_open_type2_repeat_capture(
 } // namespace
 
 int main(const int argc, char** const argv) try {
+    require_ui_texture_edges();
+    if (argc == 2 && std::string_view(argv[1]) == "--only=ui-texture-edges")
+        return EXIT_SUCCESS;
 #ifndef _WIN32
     return EXIT_SUCCESS;
 #else

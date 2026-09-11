@@ -2340,6 +2340,50 @@ incomplete_return_family_values() {
         image, lines, function_entries, edges);
 }
 
+void verify_returned_object_loads() {
+    constexpr std::array<std::uint16_t, 4u> loads{0x63C2u,0x53C8u,0x03CEu,0x63C6u};
+    for (std::size_t kind = 0u; kind < loads.size(); ++kind) {
+        for (const bool code_consumer : {false,true}) {
+            std::vector<std::uint8_t> bytes(0x40u, 0u);
+            const auto word = [&](std::size_t at, std::uint16_t value) {
+                bytes[at]=static_cast<std::uint8_t>(value);
+                bytes[at+1u]=static_cast<std::uint8_t>(value>>8u);
+            };
+            word(0x00u,0xD105u); word(0x02u,0x410Bu); word(0x04u,0x0009u);
+            word(0x06u,0x6C03u); word(0x08u,0xE000u); // factory result as address
+            word(0x0Au,loads[kind]);
+            word(0x0Cu,code_consumer ? 0x430Bu : 0x0009u);
+            word(0x0Eu,0x0009u); word(0x10u,0x000Bu); word(0x12u,0x0009u);
+            word(0x18u,0x0020u); word(0x1Au,0x0000u);
+            word(0x20u,0x6043u); word(0x22u,0x000Bu); word(0x24u,0x0009u);
+            katana::io::ExecutableImage image;
+            image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+            image.set_initial_snapshot_policy(katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+            image.add_segment({".unknown-return-object",0u,0u,bytes.size(),katana::io::SegmentKind::Mixed,
+                {true,true,true},bytes,katana::io::ImageSourceKind::DiscBootFile,
+                katana::io::ImageLoadPhase::Initial,"synthetic-unknown-return-object"});
+            image.add_entry_point(0u);
+            const auto lines=katana::sh4::disassemble(bytes,0u);
+            constexpr std::array<std::uint32_t,2u> entries{0u,0x20u};
+            const std::array<katana::analysis::ResolvedControlFlowEdge,1u> edges{{
+                {0x02u,0x20u,katana::analysis::ResolvedControlFlowKind::Call,true,
+                 katana::analysis::ControlFlowEvidence::GuardedPartial,
+                 {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},true}}};
+            const auto result=katana::analysis::analyze_function_values(image,lines,entries,edges);
+            require(result.guarded_code_inventory.walk_diagnostics.inventory_candidate_values_truncated == code_consumer,
+                "Unknown returned object load lost code provenance or invented table loss: " +
+                    std::to_string(kind) + ":" + std::to_string(code_consumer));
+            require(result.guarded_code_inventory.returned_code_address_tables.empty(),
+                "Unknown factory result manufactured a callback table");
+        }
+        const std::vector<std::uint16_t> setup{0x6C03u,0xE000u};
+        const auto address = kind == 1u ? 0x50u : 0x70u;
+        const auto finite=returned_table_values(returned_table_load_image(setup,loads[kind],{address},{{0x70u,0xC0u}}));
+        require(returned_table_candidate(finite,0x70u) != nullptr,
+            "Finite returned callback table was lost: " + std::to_string(kind));
+    }
+}
+
 katana::analysis::FunctionValueAnalysisResult
 shifted_stack_alias_values(const bool isolated_harvest) {
     std::vector<std::uint8_t> bytes(0x80u, 0x09u);
@@ -6806,6 +6850,93 @@ void verify_contextual_semantic_lane_selector() {
     verify_contextual_stale_error_regression(stale_reference);
 }
 
+void verify_inventory_stack_store_domains() {
+    const auto probe = katana::analysis::detail::
+        probe_inventory_stack_store_domains_for_testing();
+    require(probe.cases_checked == 31u &&
+                probe.wrong_domain_publications == 0u &&
+                probe.lost_stack_payloads == 0u &&
+                probe.unsound_ordinary_memory_effects == 0u,
+            "Inventory stack stores must retain their payload without "
+            "publishing it into a disjoint Memory domain: checked=" +
+                std::to_string(probe.cases_checked) + ", wrong_domain=" +
+                std::to_string(probe.wrong_domain_publications) + ", lost=" +
+                std::to_string(probe.lost_stack_payloads) + ", memory=" +
+                std::to_string(probe.unsound_ordinary_memory_effects));
+}
+
+void verify_stack_tail_join_laws() {
+    const auto probe = katana::analysis::detail::
+        probe_stack_tail_join_laws_for_testing();
+    require(probe.joins_checked == 388u &&
+                probe.inaccurate_change_notifications == 0u &&
+                probe.unconverged_joins == 0u,
+            "Stack-tail joins must report exactly the published state delta "
+            "and converge: checked=" + std::to_string(probe.joins_checked) +
+                ", inaccurate=" +
+                std::to_string(probe.inaccurate_change_notifications) +
+                ", unconverged=" + std::to_string(probe.unconverged_joins));
+    require(probe.pending_scalar_change_reported &&
+                probe.pending_scalar_union_preserved,
+            "A repeated ordinary scalar must not hide a newly joined "
+            "pending ABI scalar.");
+    for (const auto& loop : {saved_stack_epoch_missing_stack_loop_values(),
+                             saved_stack_epoch_regenerated_source_loop_values()}) {
+        require(!loop.budget_exhausted &&
+                    loop.guarded_code_inventory.walk_diagnostics
+                        .local_fixpoint_limited_evaluations == 0u &&
+                    loop.guarded_code_inventory.walk_diagnostics
+                        .maximum_local_fixpoint_iterations <= 32u,
+                "Saved-stack loop must converge without fixpoint widening.");
+    }
+}
+
+void verify_compared_branches() {
+    const auto probe = katana::analysis::detail::probe_compared_branches_for_testing();
+    require(probe.cases_checked == 116u && probe.failures == 0u,
+        "Compared branch edges must preserve aliases/Top and bound real loops: cases=" +
+            std::to_string(probe.cases_checked) + ", failures=" + std::to_string(probe.failures) +
+            ", first=" + std::to_string(probe.first_failure) +
+            ", loop_iterations=" + std::to_string(probe.maximum_loop_iterations));
+}
+
+void verify_epoch_pending_domains() {
+    const auto probe = katana::analysis::detail::probe_epoch_pending_domains_for_testing();
+    require(probe.cases_checked == 46u && probe.wrong_domain_exposures == 0u &&
+                probe.lost_payloads == 0u && probe.incorrect_restore_provenance == 0u,
+            "SavedEpoch Pending must stay in its own namespace until dereferenced: cases=" +
+                std::to_string(probe.cases_checked) + ", domain=" +
+                std::to_string(probe.wrong_domain_exposures) + ", lost=" +
+                std::to_string(probe.lost_payloads) + ", restore=" +
+                std::to_string(probe.incorrect_restore_provenance) + ", first=" +
+                std::to_string(probe.first_failure));
+}
+
+void verify_pending_arithmetic() {
+    const auto probe = katana::analysis::detail::probe_pending_arithmetic_for_testing();
+    require(probe.cases_checked == 53u && probe.incorrect_finite_sets == 0u &&
+                probe.lost_required_top == 0u,
+            "Pending arithmetic must bound unique results and preserve real losses: cases=" +
+                std::to_string(probe.cases_checked) + ", finite=" +
+                std::to_string(probe.incorrect_finite_sets) + ", top=" +
+                std::to_string(probe.lost_required_top));
+}
+
+void verify_nested_function_value_batches() {
+    const auto probe = katana::analysis::detail::
+        probe_nested_function_value_batches_for_testing();
+    require(probe.roots_completed == 64u && probe.items_completed == 1536u &&
+                probe.maximum_root_depth == 1u &&
+                probe.deterministic_errors == 2u && probe.contract_failures == 0u,
+            "Nested FVA batches must preserve all work, errors and leases "
+            "without recursive independent root execution: roots=" +
+                std::to_string(probe.roots_completed) + ", items=" +
+                std::to_string(probe.items_completed) + ", depth=" +
+                std::to_string(probe.maximum_root_depth) + ", errors=" +
+                std::to_string(probe.deterministic_errors) + ", contracts=" +
+                std::to_string(probe.contract_failures));
+}
+
 } // namespace
 
 int main(const int argc, char* argv[]) {
@@ -6828,6 +6959,27 @@ int main(const int argc, char* argv[]) {
                 verify_contextual_semantic_lane_selector();
                 std::cout
                     << "KR-4986 Contextual-Semantic-Lanes erfolgreich.\n";
+            } else if (selector == "--only=returned-object-loads") {
+                verify_returned_object_loads();
+                std::cout << "returned-object-loads: 12 focused cases passed\n";
+            } else if (selector == "--only=stack-tail-joins") {
+                verify_stack_tail_join_laws();
+                std::cout << "stack-tail-joins: 388 joins and 2 SH4 loops passed\n";
+            } else if (selector == "--only=stack-store-domains") {
+                verify_inventory_stack_store_domains();
+                std::cout << "stack-store-domains: 31 focused cases passed\n";
+            } else if (selector == "--only=compared-branches") {
+                verify_compared_branches();
+                std::cout << "compared-branches: 116 scalar, alias, delay and loop cases passed\n";
+            } else if (selector == "--only=epoch-pending-domains") {
+                verify_epoch_pending_domains();
+                std::cout << "epoch-pending-domains: 46 namespace, dereference and return cases passed\n";
+            } else if (selector == "--only=pending-arithmetic") {
+                verify_pending_arithmetic();
+                std::cout << "pending-arithmetic: 53 finite-set and Top cases passed\n";
+            } else if (selector == "--only=nested-fva-batches") {
+                verify_nested_function_value_batches();
+                std::cout << "nested-fva-batches: 64 roots, 1536 items, depth 1; errors and leases preserved\n";
             } else {
                 std::cerr
                     << "Unbekannter Testschalter; erwartet wird genau "
@@ -6842,6 +6994,13 @@ int main(const int argc, char* argv[]) {
             return EXIT_FAILURE;
         }
     }
+    verify_compared_branches();
+    verify_epoch_pending_domains();
+    verify_pending_arithmetic();
+    verify_nested_function_value_batches();
+    verify_inventory_stack_store_domains();
+    verify_stack_tail_join_laws();
+    verify_returned_object_loads();
     verify_persistent_function_value_session();
     verify_incremental_resolution_root_reuse();
     verify_delta_staging_and_cold_replacement_contract();

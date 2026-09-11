@@ -9,6 +9,7 @@
 #include "katana/analysis/jump_table_analysis.hpp"
 #include "katana/analysis/recursive_analysis.hpp"
 #include "katana/analysis/runtime_code_copy_analysis.hpp"
+#include "katana/analysis/persistent_field_copy.hpp"
 #include "katana/analysis/symbol_names.hpp"
 #include "katana/analysis/value_analysis.hpp"
 #include "katana/io/executable_image.hpp"
@@ -172,6 +173,11 @@ struct StaticCallbackFieldSinkContract final {
     // only when the register remains an exact alias of the field receiver
     // through the indirect transfer's delay slot.
     std::uint8_t receiver_argument_mask = 0u;
+    // Incoming r4..r7 whose byte-identical value is the field-load base.
+    // Separate from outgoing callback arguments: an initializer may receive
+    // a newly allocated object instead of its input descriptor. Zero means
+    // no exact base-argument proof, not the absence of a field consumer.
+    std::uint8_t base_argument_mask = 0u;
 
     bool operator==(const StaticCallbackFieldSinkContract&) const = default;
 };
@@ -203,9 +209,12 @@ struct StaticCallbackRecordTableContract final {
     // retains the existing header/count contract and requires this to be zero.
     // StaticVectorAddress also requires zero and binds vector_address instead.
     std::uint8_t table_argument = 0u;
-    // Canonical P1 runtime address for StaticVectorAddress; zero for every
-    // other source kind.
+    // Canonical P1 vector address, or resident table base; zero for shape-only contracts.
     std::uint32_t vector_address = 0u;
+    // ResidentCallbackCell only. Positive source-snapshot evidence; the target
+    // is classified as code only by the identity-bound loaded-module consumer.
+    std::uint32_t resident_cell_address = 0u;
+    std::uint32_t resident_target_address = 0u;
 
     bool operator==(
         const StaticCallbackRecordTableContract&) const = default;
@@ -236,6 +245,7 @@ struct ControlFlowAnalysisResult {
         static_persistent_pointer_sinks;
     std::vector<StaticCallbackFieldSinkContract>
         static_callback_field_sinks;
+    std::vector<PersistentFieldCopyContract> static_persistent_field_copies;
     std::vector<StaticCallbackRecordTableContract>
         static_callback_record_tables;
     bool static_callback_contracts_materialized = false;

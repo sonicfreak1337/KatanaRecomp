@@ -1050,6 +1050,10 @@ std::string analysis_cache_key_for_module(
         options.maximum_analysis_contexts;
     inputs.analyzer_abi = katana::analysis::abi_version;
     std::ostringstream external_contract;
+    require(options.conditional_module_placements.empty() &&
+                options.conditional_file_placements.empty(),
+            "Legacy cache-corruption fixture requires an unconditional candidate");
+    external_contract << "conditional::0;";
     const std::string_view cache_implementation_identity =
         !options.analysis_cache_implementation_identity.empty()
             ? std::string_view{options.analysis_cache_implementation_identity}
@@ -1092,7 +1096,13 @@ std::string analysis_cache_key_for_module(
                           << sink.load_instruction_address << ':'
                           << sink.displacement << ':' << +sink.width << ':'
                           << sink.call << ':'
-                          << +sink.receiver_argument_mask << ';';
+                          << +sink.receiver_argument_mask << ':'
+                          << +sink.base_argument_mask << ';';
+    external_contract << 'w' << options.external_persistent_field_copies.size() << ';';
+    for (const auto& copy : options.external_persistent_field_copies)
+        external_contract << copy.function_address << ':' << copy.load_instruction_address << ':'
+                          << copy.store_instruction_address << ':' << copy.displacement << ':'
+                          << +copy.argument << ':' << +copy.width << ';';
     if (!options.external_callback_record_tables.empty()) {
         external_contract << 'r'
                           << options.external_callback_record_tables.size()
@@ -1109,7 +1119,9 @@ std::string analysis_cache_key_for_module(
                               << +table.width << ':'
                               << static_cast<unsigned>(table.source_kind) << ':'
                               << +table.table_argument << ':'
-                              << table.vector_address << ';';
+                              << table.vector_address << ':'
+                              << table.resident_cell_address << ':'
+                              << table.resident_target_address << ';';
     }
     inputs.analyzer_implementation_id =
         std::string(
@@ -1453,6 +1465,26 @@ void anchored_code_vector_regressions() {
                         std::to_string(variant));
         }
 
+        if (variant == 4u || variant == 5u) {
+            for (unsigned with_anchors = variant == 4u ? 0u : 1u; with_anchors < 2u; ++with_anchors) {
+                katana::codegen::LatentAotDiscoveryOptions options;
+                options.completeness_policy =
+                    katana::codegen::LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
+                if (with_anchors) options.external_data_targets = anchors;
+                const auto audit = katana::codegen::audit_latent_aot_module_discovery(
+                    bytes, 0x85000000u, katana::codegen::LatentAotSourceTransform::Identity,
+                    runtime_base, options);
+                const auto contains = [&](std::uint32_t offset) {
+                    return std::find(audit.emitted_function_offsets.begin(),audit.emitted_function_offsets.end(),offset) != audit.emitted_function_offsets.end();
+                };
+                const bool expected = variant == 4u && with_anchors;
+                require(audit.admitted && audit.initial_entry_offsets == std::vector<std::uint32_t>{0u} &&
+                        contains(0x40u) == expected && contains(0x50u) == expected,
+                    "Unhinted vector discovery lost its source anchors or promoted a mismatched vector: " +
+                        std::to_string(variant) + ":" + std::to_string(with_anchors));
+            }
+        }
+
         katana::io::ExecutableImage image;
         image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
         katana::io::ImageSegment segment{
@@ -1642,10 +1674,763 @@ void external_literal_transfer_regressions() {
         "An inferred pointer-cluster base authorized a resident-to-module literal transfer");
 }
 
+void unhinted_module_entry_regressions() {
+    const auto literals = [](const std::vector<std::uint8_t>& decoded) {
+        std::vector<std::uint8_t> encoded;
+        std::size_t control = 0u;
+        unsigned bits = 8u;
+        const auto bit = [&](const bool value) {
+            if (bits == 8u) {
+                control = encoded.size();
+                encoded.push_back(0u);
+                bits = 0u;
+            }
+            if (value) encoded[control] |= static_cast<std::uint8_t>(1u << bits);
+            ++bits;
+        };
+        for (const auto value : decoded) {
+            bit(true);
+            encoded.push_back(value);
+        }
+        bit(false); bit(true); // PRS zero-offset long-copy terminator
+        encoded.push_back(0u); encoded.push_back(0u);
+        return encoded;
+    };
+    constexpr auto transform = katana::codegen::LatentAotSourceTransform::SegaPrs;
+    const std::vector<std::uint8_t> direct{0x0Bu, 0u, 0x09u, 0u};
+    const auto direct_audit = katana::codegen::audit_latent_aot_module_discovery(
+        literals(direct), 0x88000000u, transform, 0x8C900000u);
+    require(direct_audit.admitted && direct_audit.initial_entry_offsets == std::vector{0u},
+        "An unhinted PRS entry at zero was misclassified as a one-entry header");
+    for (const bool null_terminated : {false, true}) {
+        std::vector<std::uint8_t> decoded(0x50u, 0u);
+        const auto pointer = [&](const std::size_t at, const std::uint32_t value) {
+            for (unsigned byte = 0u; byte < 4u; ++byte)
+                decoded[at + byte] = static_cast<std::uint8_t>(value >> (byte * 8u));
+        };
+        pointer(0u, 0x0C900020u);
+        pointer(4u, null_terminated ? 0x0C900028u : 0x0C900048u);
+        if (null_terminated) pointer(8u, 0x0C900030u);
+        else std::fill(decoded.begin() + 8u, decoded.begin() + 0x20u, 0xFFu);
+        const std::vector roots = null_terminated ? std::vector{0x20u, 0x28u, 0x30u}
+                                                 : std::vector{0x20u};
+        for (const auto root : roots) {
+            decoded[root] = 0x0Bu;
+            decoded[root + 2u] = 0x09u;
+        }
+        const auto audit = katana::codegen::audit_latent_aot_module_discovery(
+            literals(decoded), 0x88000000u, transform, 0x8C900000u);
+        require(audit.admitted && audit.initial_entry_offsets == roots &&
+                !std::binary_search(audit.emitted_function_offsets.begin(),
+                    audit.emitted_function_offsets.end(), 0x48u),
+            "Unhinted discovery lost a bounded header or promoted its data anchor");
+        decoded[8u] = 0xFFu; decoded[9u] = 0xFFu;
+        decoded[10u] = 0xFFu; decoded[11u] = 0x7Fu;
+        const auto invalid = katana::codegen::audit_latent_aot_module_discovery(
+            literals(decoded), 0x88000000u, transform, 0x8C900000u);
+        require(!invalid.admitted, "A malformed module header became executable authority");
+    }
+    for (const auto entry : {0x2Cu, 0x32u}) {
+        std::vector<std::uint8_t> decoded(0x70u, 0u);
+        const auto pointer = [&](const std::size_t at, const std::uint32_t value) {
+            for (unsigned byte = 0u; byte < 4u; ++byte)
+                decoded[at + byte] = static_cast<std::uint8_t>(value >> (byte * 8u));
+        };
+        pointer(0u, 0x0C900000u + entry);
+        pointer(4u, 0x0C900060u);
+        std::fill(decoded.begin() + 8u, decoded.begin() + 0x20u, std::uint8_t{0xFFu});
+        pointer(0x20u, 0x0009000Bu); // local helper before the exported entry
+        pointer(entry, 0x0009000Bu); // entry may be only 16-bit aligned
+        const auto audit = katana::codegen::audit_latent_aot_module_discovery(
+            literals(decoded), 0x88000000u, transform, 0x8C900000u);
+        require(audit.admitted && audit.initial_entry_offsets == std::vector{entry} &&
+                !std::binary_search(audit.emitted_function_offsets.begin(),
+                    audit.emitted_function_offsets.end(), 0x20u) &&
+                !std::binary_search(audit.emitted_function_offsets.begin(),
+                    audit.emitted_function_offsets.end(), 0x60u),
+            "A compact header lost its later entry or promoted the preceding helper/data");
+        pointer(8u, 0x7FFFFFFFu); // destroy the required FF padding signature
+        const auto invalid = katana::codegen::audit_latent_aot_module_discovery(
+            literals(decoded), 0x88000000u, transform, 0x8C900000u);
+        require(!invalid.admitted, "A later entry bypassed the compact header signature");
+    }
+}
+
+void physical_runtime_callback_regressions() {
+    // A local higher-order constructor invokes its incoming r6 callback.
+    // Only the constructor's caller is a root; no callback address is hinted.
+    const std::array roots{0u};
+    katana::codegen::LatentAotDiscoveryOptions options;
+    options.mode = katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+    options.completeness_policy = katana::codegen::
+        LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
+    for (const auto runtime : {0x8C900000u, 0x8C500000u}) {
+        for (const auto region : {0u, 0x80000000u, 0xA0000000u, 0xE0000000u}) {
+            std::vector<std::uint8_t> bytes(0x100u, 0u);
+            const auto word = [&](const std::size_t at, const std::uint16_t value) {
+                bytes[at] = static_cast<std::uint8_t>(value);
+                bytes[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+            };
+            word(0x00u, 0x4F22u); // sts.l pr,@-r15
+            word(0x02u, 0xD607u); // mov.l @(0x20,pc),r6
+            word(0x04u, 0xB01Cu); // bsr 0x40
+            word(0x06u, 0x0009u);
+            word(0x08u, 0x4F26u); // lds.l @r15+,pr
+            word(0x0Au, 0x000Bu);
+            word(0x0Cu, 0x0009u);
+            const auto pointer = ((runtime + 0x80u) & 0x1FFFFFFFu) | region;
+            for (unsigned byte = 0u; byte < 4u; ++byte)
+                bytes[0x20u + byte] = static_cast<std::uint8_t>(pointer >> (byte * 8u));
+            word(0x40u, 0x2FC6u); // mov.l r12,@-r15
+            word(0x42u, 0x4F22u);
+            word(0x44u, 0x6C63u); // mov r6,r12
+            word(0x46u, 0x4C0Bu); // jsr @r12
+            word(0x48u, 0xE401u); // mov #1,r4 (delay)
+            word(0x4Au, 0x4F26u);
+            word(0x4Cu, 0x000Bu);
+            word(0x4Eu, 0x6CF6u); // mov.l @r15+,r12 (delay)
+            word(0x80u, 0xE02Au); // callback: mov #42,r0
+            word(0x82u, 0x000Bu);
+            word(0x84u, 0x0009u);
+            const auto audit = katana::codegen::audit_latent_aot_module(
+                bytes, 0x88000000u, roots, runtime, options);
+            const bool found = std::binary_search(audit.emitted_function_offsets.begin(),
+                audit.emitted_function_offsets.end(), 0x80u);
+            require(audit.admitted && found == (region != 0xE0000000u),
+                "Local callback lost its bound physical/P1/P2 placement or admitted P4");
+        }
+    }
+}
+
+void direct_callee_shape_regressions() {
+    using katana::analysis::detail::GuardedNativeEntryShapeCache;
+    using katana::analysis::detail::GuardedNativeEntryShapeStatus;
+    for (unsigned variant = 0u; variant < 5u; ++variant) {
+        std::vector<std::uint8_t> bytes(0x3000u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        for (std::size_t at = 0u; at < bytes.size(); at += 2u) word(at, 0x0009u);
+        word(0u, 0xB00Eu); // BSR 0x20
+        word(4u, 0x000Bu);
+        word(0x20u, 0xB00Eu); // BSR 0x40
+        word(0x24u, 0x000Bu);
+        word(0x40u, 0x000Bu);
+        if (variant == 0u) {
+            word(0x40u, 0xB001u);
+            word(0x42u, 0xA001u); // invalid branch in nested callee's slot
+        } else if (variant == 1u) {
+            word(0x40u, 0xBFDEu); // recursive direct call back to entry 0
+            word(0x44u, 0x000Bu);
+        } else if (variant == 2u) {
+            // Two 3000-instruction bodies exceed 4K together, but each body
+            // remains within its own limit. A flat closure budget is wrong.
+            for (std::size_t at = 0u; at < bytes.size(); at += 2u) word(at, 0x0009u);
+            word(5992u, 0xB04Au); // BSR 0x1800 near the end of body one
+            word(5996u, 0x000Bu);
+            word(0x1800u + 5996u, 0x000Bu);
+        } else if (variant == 3u) {
+            word(0u, 0xB800u); // direct callee is outside this image
+        } else {
+            for (std::size_t at = 0u; at < bytes.size(); at += 2u) word(at, 0x0009u);
+            word(9000u, 0x000Bu); // one body exceeds 4K
+        }
+        katana::io::ExecutableImage image;
+        image.add_segment({"callee-shape", 0x8C900000u, 0u, bytes.size(),
+            katana::io::SegmentKind::Mixed, {true, false, true}, std::move(bytes)});
+        GuardedNativeEntryShapeCache shapes(image);
+        const auto expected = variant == 0u ? GuardedNativeEntryShapeStatus::StructurallyInvalid :
+            variant == 4u ? GuardedNativeEntryShapeStatus::ShapeBudgetExceeded :
+            GuardedNativeEntryShapeStatus::Valid;
+        require(shapes.classify(0x8C900000u) == expected,
+                "Direct callee closure shape/budget mismatch: " + std::to_string(variant));
+        require(shapes.classify(0x8C900000u) == expected,
+                "Direct callee closure cache lost its result");
+        if (variant == 0u)
+            require(shapes.classify(0x8C900020u) == expected,
+                    "Failed caller leaked a local-only valid suffix into the shape cache");
+    }
+}
+
+void direct_descriptor_callback_regressions(const bool copied_word = false) {
+    constexpr std::uint32_t runtime = 0x8C900000u;
+    constexpr std::uint32_t consumer = 0x8C022000u;
+    const std::array external{consumer, consumer + 0x100u};
+    for (unsigned variant = 0u; variant < (copied_word ? 13u : 11u); ++variant) {
+        const auto invalid_shape = copied_word ? 11u : 9u;
+        std::vector<std::uint8_t> bytes(0x140u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at+1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto pointer = [&](std::size_t at, std::uint32_t value) {
+            for (unsigned byte = 0u; byte < 4u; ++byte)
+                bytes[at+byte] = static_cast<std::uint8_t>(value >> (8u*byte));
+        };
+        word(0x00u, 0xD307u); // bound primary consumer
+        word(0x02u, variant == 1u ? 0xE500u : 0xD508u); // local descriptor, or unknown until slot
+        word(0x04u, 0x0009u);
+        word(0x06u, 0x432Bu); // tail call
+        word(0x08u, variant == 1u ? 0xD506u : variant == 3u ? 0xE500u : 0x0009u);
+        pointer(0x20u, variant == 4u ? consumer+0x100u : consumer);
+        pointer(0x24u, variant == 1u ? 0u : variant == 5u ? runtime+0x13Cu :
+                      variant == 6u ? 0xEC900040u : variant == 9u ? 0x0C900040u :
+                      variant == 10u ? 0xAC900040u : runtime+0x40u);
+        pointer(0x40u+(copied_word ? 12u : 8u), variant == 7u ? 0u : runtime+0x100u);
+        if (variant == 1u) pointer(0x24u, runtime+0x40u); // descriptor defined in delay slot
+        word(0x100u, 0xE02Au); word(0x102u, 0x000Bu); word(0x104u, 0x0009u);
+        if (variant == invalid_shape) {
+            // Branch-looking data passes the early-control-flow heuristic,
+            // but a branch in a delay slot is never a valid callback body.
+            word(0x102u, 0xB001u); word(0x104u, 0xA001u);
+            word(0x108u, 0x000Bu); word(0x10Au, 0x0009u);
+        } else if (variant == invalid_shape + 1u) {
+            // A valid isolated body is still not an independent entry when
+            // its first word belongs to the preceding branch's delay slot.
+            word(0xFEu, 0xA003u);
+        }
+        std::array fields{katana::codegen::LatentAotExternalCallbackFieldSink{
+            consumer, consumer+0x10u, consumer+0x0Cu, 8, 4u, true, 0u,
+            static_cast<std::uint8_t>(variant == 2u ? 1u : variant == 8u ? 0u : 2u)}};
+        katana::codegen::LatentAotDiscoveryOptions options;
+        options.external_code_targets = external;
+        std::array copies{katana::analysis::PersistentFieldCopyContract{
+            consumer, consumer+0x0Cu, consumer+0x10u, 12,
+            static_cast<std::uint8_t>(variant == 2u ? 0u : 1u), 4u}};
+        if (copied_word) {
+            if (variant != 8u) options.external_persistent_field_copies = copies;
+        } else {
+            options.external_callback_field_sinks = fields;
+        }
+        const auto audit = katana::codegen::audit_latent_aot_module_discovery(
+            bytes, 0x88000000u, katana::codegen::LatentAotSourceTransform::Identity,
+            runtime, options);
+        const bool found = std::binary_search(audit.emitted_function_offsets.begin(), audit.emitted_function_offsets.end(), 0x100u);
+        require(audit.admitted && found == (variant <= 1u ||
+                (copied_word && variant >= 9u && variant <= 10u)),
+            "Direct descriptor callback missed or bypassed callee/base/delay/bounds proof: " + std::to_string(variant));
+        if (copied_word && variant == 0u) {
+            AnalysisCacheFixture cache{"-field-copy"};
+            const auto source = std::make_shared<katana::runtime::MemoryDiscSource>(
+                fixture_iso_with_files({{21u, "COPY.BIN;1", bytes}}), "field-copy-module-cache");
+            const std::array hints{katana::codegen::LatentAotEntryHint{
+                byte_identity(bytes), 21u * sector_size, static_cast<std::uint32_t>(bytes.size()),
+                0u, 0x88000000u, runtime}};
+            options.mode = katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+            options.completeness_policy = katana::codegen::LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
+            options.maximum_workers = 1u;
+            options.analysis_cache_root = cache.path;
+            options.analysis_implementation_identity = "field-copy-cache-v1";
+            const auto run = [&] {
+                return katana::codegen::discover_latent_aot_modules(source, 0u, 0u, {}, options, {}, hints);
+            };
+            const auto cold = run();
+            const auto warm = run();
+            require(cold.modules.size() == 1u && warm.modules.size() == 1u &&
+                    cold.module_static_cache_stores == 1u && warm.module_static_cache_hits == 1u &&
+                    cold.modules.front().entry_offsets == warm.modules.front().entry_offsets &&
+                    std::binary_search(warm.modules.front().entry_offsets.begin(), warm.modules.front().entry_offsets.end(), 0x100u),
+                    "Field-copy module cache failed to preserve exact roots/provenance");
+            options.external_persistent_field_copies = {};
+            const auto removed = run();
+            require(removed.modules.size() == 1u && removed.module_static_cache_hits == 0u &&
+                    !std::binary_search(removed.modules.front().entry_offsets.begin(), removed.modules.front().entry_offsets.end(), 0x100u),
+                    "Removing field-copy proof reused its previously discovered root");
+        }
+    }
+}
+
 } // namespace
+
+void resident_callback_module_regressions() {
+    constexpr std::uint32_t runtime = 0x8c300000u, owner = 0x8c120000u, sink = 0x8c130000u;
+    for (unsigned variant = 0u; variant < 9u; ++variant) {
+        std::vector<std::uint8_t> bytes(0x50u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at+1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        for (const auto offset : {0u,0x20u,0x30u}) {
+            word(offset,0xe02au); word(offset+2u,0x000bu); word(offset+4u,0x0009u);
+        }
+        if (variant == 7u) word(0x20u,0xffffu);
+        const auto source = variant == 5u ? runtime-0x10u : variant == 6u ? runtime+0x1000u : 0x85000000u;
+        const std::array code{owner,sink};
+        const std::array sinks{katana::codegen::LatentAotExternalCallbackSink{sink,
+            static_cast<std::uint8_t>(variant == 3u ? 2u : 4u),0u}};
+        const std::array tables{katana::codegen::LatentAotExternalCallbackRecordTable{
+            owner,owner+0x10u,owner+0xcu,sink,0,4u,0,2u,4u,
+            katana::analysis::CallbackRecordTableSource::ResidentCallbackCell,0u,0x8c180000u,
+            0x8c180008u,variant == 6u ? source+0x20u : runtime+0x20u}};
+        katana::codegen::LatentAotDiscoveryOptions options;
+        options.external_code_targets = code;
+        if (variant != 2u) options.external_callback_sinks = sinks;
+        options.external_callback_record_tables = tables;
+        const std::optional<std::uint32_t> placement = variant == 8u ? std::nullopt :
+            std::optional<std::uint32_t>(variant == 4u ? runtime+0x1000u : runtime);
+        if (variant == 5u) {
+            bool rejected = false;
+            try {
+                static_cast<void>(katana::codegen::audit_latent_aot_module_discovery(
+                    bytes,source,katana::codegen::LatentAotSourceTransform::Identity,placement,options));
+            } catch (const std::exception& error) {
+                rejected = std::string_view(error.what()).find("Adressalias ueberlappt") != std::string_view::npos;
+            }
+            require(rejected,"Overlapping source/runtime aliases were admitted");
+            continue;
+        }
+        const auto audit = katana::codegen::audit_latent_aot_module_discovery(
+            bytes,source,katana::codegen::LatentAotSourceTransform::Identity,placement,options,variant == 1u);
+        const auto found = [&](std::uint32_t offset) {
+            return std::binary_search(audit.emitted_function_offsets.begin(),audit.emitted_function_offsets.end(),offset);
+        };
+        if (!audit.admitted || found(0x20u) != (variant == 0u) || found(0x30u)) {
+            std::cerr << "resident audit variant=" << variant << " admitted=" << audit.admitted
+                << " rejection=" << audit.rejection << ':' << audit.rejection_detail << " emitted=";
+            for (const auto offset : audit.emitted_function_offsets) std::cerr << std::hex << offset << ',';
+            std::cerr << " proposed=";
+            for (const auto offset : audit.record_callback_proposed_offsets) std::cerr << std::hex << offset << ',';
+            std::cerr << std::dec << '\n';
+        }
+        require(audit.admitted && found(0x20u) == (variant == 0u) && !found(0x30u),
+            "Resident callback violated runtime/source/sink/Strict proof: " + std::to_string(variant));
+        require(sinks[0].record_argument_mask == 0u,"Resident cell promoted callback receiver ABI");
+    }
+}
+
+void published_header_module_regressions() {
+    constexpr std::uint32_t runtime = 0x8c300000u, owner = 0x8c120000u, sink = 0x8c130000u;
+    using Source = katana::analysis::CallbackRecordTableSource;
+    for (unsigned variant = 0u; variant < 17u; ++variant) {
+        std::vector<std::uint8_t> bytes(0x150u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at+1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto pointer = [&](std::size_t at, std::uint32_t value) {
+            for (unsigned i = 0u; i < 4u; ++i) bytes[at+i] = static_cast<std::uint8_t>(value >> (8u*i));
+        };
+        for (const auto at : {0u,0x100u,0x110u,0x120u}) {
+            word(at,0xe02au); word(at+2u,0x000bu); word(at+4u,0x0009u);
+        }
+        const std::uint32_t source = variant == 5u ? 0x8c400000u : 0x88000000u;
+        pointer(0x40u,variant == 13u ? 0u : 0xffffffffu); // No consumed count.
+        pointer(0x44u,variant == 6u ? source+0x60u :
+            variant == 12u ? 0xac300060u : runtime+0x60u);
+        pointer(0x60u+12u,variant == 11u ? sink+0x1000u : variant == 14u ? 0xa05f8000u :
+            variant == 15u ? sink+1u : variant == 16u ? runtime+0x14eu : sink);
+        pointer(0x60u+40u+12u,runtime+0x100u); // after an external callback and null hole
+        pointer(0x60u+60u+12u,0xac300110u);
+        pointer(0x60u+80u+12u,0x2010u);
+        pointer(0x60u+100u+12u,runtime+0x120u); // beyond invalid record
+        if (variant == 8u) word(0x100u,0xffffu);
+        const std::array code{owner,sink};
+        const std::array sinks{katana::codegen::LatentAotExternalCallbackSink{
+            sink,static_cast<std::uint8_t>(variant == 3u ? 2u : 4u),0u}};
+        const std::array tables{katana::codegen::LatentAotExternalCallbackRecordTable{
+            owner,owner+0x10u,owner+0xcu,sink,variant == 9u ? 8 : 4,20u,12,2u,4u,
+            Source::PublishedHeaderRecords,0u,0x8c780008u,0x8c180010u,
+            variant == 5u ? source+0x40u : variant == 7u ? runtime+0x14cu : runtime+0x40u}};
+        katana::codegen::LatentAotDiscoveryOptions options;
+        options.external_code_targets = code;
+        if (variant != 2u) options.external_callback_sinks = sinks;
+        options.external_callback_record_tables = tables;
+        const std::optional<std::uint32_t> placement = variant == 10u ? std::nullopt :
+            std::optional<std::uint32_t>{variant == 4u ? runtime+0x1000u : runtime};
+        const auto audit = katana::codegen::audit_latent_aot_module_discovery(
+            bytes,source,katana::codegen::LatentAotSourceTransform::Identity,placement,options,variant == 1u);
+        const auto found = [&](std::uint32_t at) {
+            return std::binary_search(audit.emitted_function_offsets.begin(),audit.emitted_function_offsets.end(),at);
+        };
+        const bool positive = variant == 0u || (variant >= 11u && variant <= 13u);
+        require(audit.admitted && found(0x100u) == positive && found(0x110u) == positive && !found(0x120u),
+            "Published header violated runtime/source/sink/extent/Strict contract: " + std::to_string(variant));
+        if (variant == 0u) {
+            AnalysisCacheFixture cache{"-published-header"};
+            const auto disc = std::make_shared<katana::runtime::MemoryDiscSource>(
+                fixture_iso_with_files({{21u,"HEADERS.BIN;1",bytes}}),"published-header-module-cache");
+            const std::array hints{katana::codegen::LatentAotEntryHint{
+                byte_identity(bytes),21u*sector_size,static_cast<std::uint32_t>(bytes.size()),0u,source,runtime}};
+            options.mode = katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+            options.completeness_policy = katana::codegen::LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
+            options.maximum_workers = 1u;
+            options.analysis_cache_root = cache.path;
+            options.analysis_implementation_identity = "published-header-cache-v1";
+            const auto run = [&] {
+                return katana::codegen::discover_latent_aot_modules(disc,0u,0u,{},options,{},hints);
+            };
+            const auto cold = run(); const auto warm = run();
+            require(cold.modules.size() == 1u && warm.modules.size() == 1u &&
+                cold.module_static_cache_stores == 1u && warm.module_static_cache_hits == 1u &&
+                cold.modules.front().entry_offsets == warm.modules.front().entry_offsets &&
+                std::binary_search(warm.modules.front().entry_offsets.begin(),warm.modules.front().entry_offsets.end(),0x100u),
+                "Published header module cache lost source-bound candidates");
+            options.external_callback_record_tables = {};
+            const auto removed = run();
+            require(removed.modules.size() == 1u && removed.module_static_cache_hits == 0u &&
+                !std::binary_search(removed.modules.front().entry_offsets.begin(),removed.modules.front().entry_offsets.end(),0x100u),
+                "Removing published-header evidence retained a stale root");
+        }
+    }
+}
+
+void conditional_callback_coverage_regressions() {
+    using namespace katana::codegen;
+    constexpr std::uint32_t runtime = 0x8c300000u, source = 0x85000000u;
+    constexpr std::uint32_t owner = 0x8c120000u, sink = 0x8c130000u;
+    for (unsigned variant = 0u; variant < 12u; ++variant) {
+        std::vector<std::uint8_t> bytes(0x80u, 0xffu);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        word(0x20u,0xe02au); word(0x22u,0x000bu); word(0x24u,0x0009u);
+        if (variant == 7u) word(0x20u,0xffffu);
+        if (variant == 8u) word(0x1eu,0xa000u);
+        const std::array code{owner,sink};
+        const std::array sinks{LatentAotExternalCallbackSink{sink,4u,0u}};
+        auto table = LatentAotExternalCallbackRecordTable{owner,owner+0x10u,owner+0xcu,sink,
+            0,4u,0,2u,4u,katana::analysis::CallbackRecordTableSource::ResidentCallbackCell,
+            0u,0x8c180000u,0x8c180008u,runtime+0x20u};
+        if (variant == 9u) table.source_kind = katana::analysis::CallbackRecordTableSource::StaticVectorAddress;
+        std::vector placements{LatentAotConditionalModulePlacement{LatentAotSourceTransform::Identity,
+            byte_identity(bytes),static_cast<std::uint32_t>(bytes.size()),byte_identity(bytes),
+            static_cast<std::uint32_t>(bytes.size()),runtime,byte_identity(bytes)}};
+        if (variant == 4u) placements[0].source_byte_identity = "sha256:" + std::string(64u,'0');
+        if (variant == 5u) placements[0].decoded_byte_identity = "sha256:" + std::string(64u,'0');
+        if (variant == 6u) ++placements[0].source_byte_size;
+        if (variant == 10u) { placements.push_back(placements.front()); placements.back().possible_runtime_base += 0x1000u; }
+        if (variant == 11u) placements[0].source_contract_identity = "unbound";
+        LatentAotDiscoveryOptions options;
+        options.external_code_targets = code;
+        if (variant != 3u) options.external_callback_sinks = sinks;
+        options.external_callback_record_tables = std::span(&table,1u);
+        if (variant != 2u) options.conditional_module_placements = placements;
+        if (variant == 11u) {
+            bool rejected = false;
+            try { static_cast<void>(audit_latent_aot_module_discovery(bytes,source,
+                LatentAotSourceTransform::Identity,std::nullopt,options)); }
+            catch (const std::invalid_argument&) { rejected = true; }
+            require(rejected,"Unbound conditional placement was accepted");
+            continue;
+        }
+        const auto audit = audit_latent_aot_module_discovery(bytes,source,
+            LatentAotSourceTransform::Identity,std::nullopt,options,variant == 1u);
+        require(audit.admitted == (variant == 0u),"Conditional coverage admission variant " + std::to_string(variant));
+        require(audit.conditional_callback_entry_offsets ==
+            (variant == 0u ? std::vector<std::uint32_t>{0x20u} : std::vector<std::uint32_t>{}),
+            "Conditional callback provenance mixed roots or accepted a negative case");
+        if (variant == 0u) {
+            require(audit.emitted_function_offsets == std::vector<std::uint32_t>{0x20u} &&
+                audit.conditional_callback_runtime_base == runtime &&
+                !audit.conditional_callback_contract_identity.empty() && audit.loader_tail_diagnostics.empty(),
+                "Conditional coverage acquired offset-zero/loader-tail authority");
+        }
+    }
+    // Persistent cache identity includes both the conditional derivation and
+    // its provenance class. Removing evidence must not retain its roots.
+    std::vector<std::uint8_t> bytes(0x80u,0u);
+    for (const auto at : {0u,0x20u}) {
+        bytes[at]=0x2au;bytes[at+1u]=0xe0u;bytes[at+2u]=0x0bu;
+        bytes[at+4u]=0x09u;
+    }
+    const auto identity = byte_identity(bytes);
+    std::array placements{LatentAotConditionalModulePlacement{LatentAotSourceTransform::Identity,
+        identity,128u,identity,128u,runtime,identity}};
+    const std::array code{owner,sink};
+    const std::array sinks{LatentAotExternalCallbackSink{sink,4u,0u}};
+    const std::array tables{LatentAotExternalCallbackRecordTable{owner,owner+0x10u,owner+0xcu,sink,
+        0,4u,0,2u,4u,katana::analysis::CallbackRecordTableSource::ResidentCallbackCell,
+        0u,0x8c180000u,0x8c180008u,runtime+0x20u}};
+    AnalysisCacheFixture cache{"-conditional-resident"};
+    const auto disc = std::make_shared<katana::runtime::MemoryDiscSource>(
+        fixture_iso_with_files({{21u,"CALLBACK.BIN;1",bytes}}),"conditional-module-cache");
+    LatentAotDiscoveryOptions options;
+    options.completeness_policy = LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
+    options.maximum_workers = 1u;
+    options.external_code_targets = code;options.external_callback_sinks = sinks;
+    options.external_callback_record_tables = tables;options.conditional_module_placements = placements;
+    options.analysis_cache_root = cache.path;options.analysis_implementation_identity = "conditional-cache-v1";
+    LatentAotDiscoverySession conditional_session;
+    const auto run = [&] { return discover_latent_aot_modules(disc,0u,0u,{},options,
+        {},{},{},conditional_session); };
+    const auto cold = run(); const auto warm = run();
+    require(cold.modules.size()==1u && warm.modules.size()==1u && warm.analysis_full_pipeline_runs==0u &&
+        warm.modules.front().entry_offsets == std::vector<std::uint32_t>{0x20u},
+        "Conditional discovery/cache lost its exact callback roots");
+    LatentAotDiscoverySession disk_session;
+    const auto persisted = discover_latent_aot_modules(disc,0u,0u,{},options,{},{},{},disk_session);
+    require(persisted.modules.size()==1u && persisted.module_static_cache_hits==1u &&
+        persisted.modules.front().entry_offsets==warm.modules.front().entry_offsets,
+        "Fresh discovery session lost persisted conditional coverage");
+    placements[0].source_contract_identity = "sha256:" + std::string(64u,'a');
+    const auto rebound = run();
+    require(rebound.modules.size()==1u && rebound.module_static_cache_hits==0u,
+        "Conditional source derivation change reused stale static coverage");
+    options.conditional_module_placements = {};
+    const auto removed = run();
+    require(removed.modules.size()==1u && removed.module_static_cache_hits==0u &&
+        !std::binary_search(removed.modules.front().entry_offsets.begin(),removed.modules.front().entry_offsets.end(),0x20u),
+        "Removing conditional evidence retained stale callback coverage");
+    options.conditional_module_placements = placements;
+    const auto restored = run();
+    require(restored.modules.size() == 1u &&
+        restored.modules.front().entry_offsets == std::vector<std::uint32_t>{0x20u},
+        "Adding conditional evidence did not refresh the retained catalog");
+    options.external_callback_sinks = {};
+    const auto unsunk = run();
+    require(unsunk.modules.size() == 1u &&
+        !std::binary_search(unsunk.modules.front().entry_offsets.begin(),
+            unsunk.modules.front().entry_offsets.end(), 0x20u),
+        "Removing a call-local sink retained conditional catalog roots");
+    options.external_callback_sinks = sinks;
+    const auto resunk = run();
+    require(resunk.modules.size() == 1u &&
+        resunk.modules.front().entry_offsets == std::vector<std::uint32_t>{0x20u},
+        "Restoring a call-local sink did not refresh conditional catalog roots");
+
+    // The ordinary disc pass binds source-call filenames to current PRS
+    // bytes. It must invalidate session roots on renamed/removed evidence
+    // and refuse staging/output aliases or conflicting duplicate placements.
+    const auto encode_literals = [](const std::vector<std::uint8_t>& decoded) {
+        std::vector<std::uint8_t> encoded;
+        std::size_t control = 0u;
+        unsigned bits = 8u;
+        const auto bit = [&](bool set) {
+            if (bits == 8u) { control=encoded.size(); encoded.push_back(0u); bits=0u; }
+            if (set) encoded[control] |= static_cast<std::uint8_t>(1u << bits);
+            ++bits;
+        };
+        for (auto value : decoded) { bit(true); encoded.push_back(value); }
+        bit(false); bit(true); encoded.push_back(0u); encoded.push_back(0u);
+        return encoded;
+    };
+    const auto prs_bytes = encode_literals(bytes);
+    const auto file_disc = std::make_shared<katana::runtime::MemoryDiscSource>(
+        fixture_iso_with_files({{21u,"CALLBACK.PRS;1",prs_bytes}}),"conditional-file-source");
+    std::vector<katana::analysis::NativeConditionalFilePlacement> file_calls{
+        {owner,owner+0x10u,sink,"callback.prs",runtime,0x0cf00000u,identity}};
+    auto file_options = options;
+    file_options.conditional_module_placements = {};
+    file_options.conditional_file_placements = file_calls;
+    LatentAotDiscoverySession file_session;
+    const auto file_run = [&] { return discover_latent_aot_modules(file_disc,0u,0u,{},file_options,
+        {},{},{},file_session); };
+    const auto file_cold=file_run(); const auto file_warm=file_run();
+    require(file_cold.modules.size()==1u && file_warm.modules.size()==1u &&
+        file_warm.analysis_full_pipeline_runs==0u &&
+        file_warm.modules[0].entry_offsets==std::vector<std::uint32_t>{0x20u},
+        "Current PRS filename binding lost conditional callback coverage");
+    file_calls[0].file_name="missing/callback.prs";
+    const auto wrong_path=file_run();
+    require(wrong_path.modules.size()==1u && wrong_path.modules[0].entry_offsets!=std::vector<std::uint32_t>{0x20u},
+        "Wrong directory matched only by basename or retained stale catalog roots");
+    file_calls[0].file_name="callback.prs";
+    file_calls[0].staging_buffer_address=runtime & 0x1fffffffu;
+    const auto overlap=file_run();
+    require(overlap.modules.size()==1u && overlap.modules[0].entry_offsets!=std::vector<std::uint32_t>{0x20u},
+        "PRS staging/output aliases were treated as a valid conditional transform");
+    file_calls[0].staging_buffer_address=0x0cf00000u;
+    file_calls.push_back({owner,owner+0x20u,sink,"COPY.PRS",runtime+0x1000u,0x0cf00000u,identity});
+    file_options.conditional_file_placements=file_calls;
+    const auto duplicate_disc=std::make_shared<katana::runtime::MemoryDiscSource>(
+        fixture_iso_with_files({{21u,"CALLBACK.PRS;1",prs_bytes},{22u,"COPY.PRS;1",prs_bytes}}),
+        "conditional-conflicting-copies");
+    const auto duplicate=discover_latent_aot_modules(duplicate_disc,0u,0u,{},file_options);
+    require(duplicate.modules.size()==1u && duplicate.modules[0].entry_offsets!=std::vector<std::uint32_t>{0x20u},
+        "Identical decoded files retained the first of conflicting possible placements");
+
+    // A literal jump may target this function's block, another function's
+    // entry, or an interior block owned by that other function. Only the
+    // first two have an IR edge in the caller's graph; the last stays an
+    // original dynamic transfer. Exercise both analysis and static replay.
+    for (unsigned variant = 0u; variant < 3u; ++variant) {
+        std::vector<std::uint8_t> body(0xa0u, 0xffu);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            body[at] = static_cast<std::uint8_t>(value);
+            body[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        word(0u, 0xe02au); word(2u, 0xa00du); word(4u, 0x0009u);
+        word(0x20u, 0x000bu); word(0x22u, 0x0009u);
+        word(0x40u, 0x2448u); word(0x42u, 0x8b05u);
+        word(0x44u, 0xd30eu); word(0x46u, 0x432bu); word(0x48u, 0x0009u);
+        word(0x50u, 0x000bu); word(0x52u, 0x0009u);
+        const auto target_offset = variant == 0u ? 0x20u : variant == 1u ? 0x50u : 0u;
+        for (unsigned byte = 0u; byte < 4u; ++byte)
+            body[0x80u + byte] = static_cast<std::uint8_t>((runtime + target_offset) >> (byte * 8u));
+        const auto body_identity = byte_identity(body);
+        const std::array body_placements{LatentAotConditionalModulePlacement{
+            LatentAotSourceTransform::Identity, body_identity, 0xa0u,
+            body_identity, 0xa0u, runtime, body_identity}};
+        auto body_tables = std::array{tables.front(), tables.front()};
+        body_tables[0].resident_target_address = runtime;
+        body_tables[1].resident_target_address = runtime + 0x40u;
+        body_tables[1].resident_cell_address += 4u;
+        AnalysisCacheFixture body_cache{"-literal-jump-owner-" + std::to_string(variant)};
+        const auto body_disc = std::make_shared<katana::runtime::MemoryDiscSource>(
+            fixture_iso_with_files({{21u, "OWNER.BIN;1", body}}), "literal-jump-owner");
+        auto body_options = options;
+        body_options.external_callback_record_tables = body_tables;
+        body_options.conditional_module_placements = body_placements;
+        body_options.analysis_cache_root = body_cache.path;
+        body_options.analysis_implementation_identity = "literal-jump-owner-v1";
+        for (unsigned pass = 0u; pass < 2u; ++pass) {
+            const auto result = discover_latent_aot_modules(body_disc, 0u, 0u, {}, body_options);
+            require(result.modules.size() == 1u &&
+                    result.module_static_cache_hits == pass,
+                "Literal jump owner analysis/cache failed, variant=" + std::to_string(variant));
+            const auto& module = result.modules.front();
+            const katana::ir::Instruction* jump = nullptr;
+            for (const auto& function : module.program)
+                for (const auto& block : function.blocks)
+                    for (const auto& instruction : block.instructions)
+                        if (instruction.source_address == module.source_address + 0x46u)
+                            jump = &instruction;
+            require(jump && jump->operation == katana::ir::Operation::JumpRegister &&
+                    (variant == 0u ? jump->resolved_targets.empty() :
+                        jump->resolved_targets == std::vector<std::uint32_t>{module.source_address + target_offset}),
+                "Literal jump acquired a foreign interior owner or lost a valid target");
+        }
+    }
+}
+
+void overlapping_local_transfer_regressions() {
+    using namespace katana::codegen;
+    constexpr std::uint32_t source = 0x88000000u;
+    constexpr std::uint32_t runtime = 0x8c240000u;
+    for (const bool resume_loads_target : {false, true}) {
+        std::vector<std::uint8_t> bytes(0x80u, 0u);
+        const auto word = [&](const std::size_t at, const std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        // Outer entry establishes callee-saved r10. The separate resume entry
+        // reaches the same call from behind without inheriting that fact.
+        word(0x00u, 0xda17u); // mov.l [0x60],r10
+        word(0x02u, 0xa001u); word(0x04u, 0x0009u); // bra 0x08; nop
+        word(0x08u, 0x4a0bu); word(0x0au, 0x0009u); // jsr @r10; nop
+        word(0x0cu, 0xa008u); word(0x0eu, 0x0009u); // bra 0x20; nop
+        word(0x20u, resume_loads_target ? 0xda0fu : 0xe001u);
+        word(0x22u, 0xaff1u); word(0x24u, 0x0009u); // bra 0x08; nop
+        word(0x40u, 0xe02au); word(0x42u, 0x000bu); word(0x44u, 0x0009u);
+        for (unsigned byte = 0u; byte < 4u; ++byte)
+            bytes[0x60u + byte] = static_cast<std::uint8_t>((runtime + 0x40u) >> (byte * 8u));
+        // Two independent pointer/function-offset votes supply only the late
+        // resolver's possible placement. Do not install a proven CFA alias.
+        for (unsigned byte = 0u; byte < 4u; ++byte)
+            bytes[0x64u + byte] = static_cast<std::uint8_t>(runtime >> (byte * 8u));
+        const auto identity = byte_identity(bytes);
+        const std::array hints{
+            LatentAotEntryHint{identity, 21u * sector_size, 0x80u, 0u, source},
+            LatentAotEntryHint{identity, 21u * sector_size, 0x80u, 0x20u, source},
+            LatentAotEntryHint{identity, 21u * sector_size, 0x80u, 0x40u, source}};
+        const auto disc = std::make_shared<katana::runtime::MemoryDiscSource>(
+            fixture_iso_with_files({{21u, "SHARED.BIN;1", bytes}}), "overlapping-local-transfers");
+        AnalysisCacheFixture cache{resume_loads_target ? "-overlap-agrees" : "-overlap-unknown"};
+        LatentAotDiscoveryOptions options;
+        options.mode = LatentAotDiscoveryMode::ExactOnly;
+        options.completeness_policy = LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
+        options.maximum_workers = 1u;
+        options.analysis_cache_root = cache.path;
+        options.analysis_implementation_identity = "overlapping-local-transfers-v1";
+        for (unsigned pass = 0u; pass < 2u; ++pass) {
+            const auto result = discover_latent_aot_modules(disc, 0u, 0u, {}, options, {}, hints);
+            require(result.modules.size() == 1u,
+                "Overlapping transfer fixture/cache was not admitted: modules=" +
+                    std::to_string(result.modules.size()) + " hits=" +
+                    std::to_string(result.module_static_cache_hits) + " pass=" + std::to_string(pass) +
+                    (result.analysis_candidate_diagnostics.empty() ? "" :
+                        " rejection=" + result.analysis_candidate_diagnostics.front().rejection +
+                        " detail=" + result.analysis_candidate_diagnostics.front().rejection_detail));
+            const auto& module = result.modules.front();
+            const katana::ir::Instruction* first = nullptr;
+            std::vector<std::uint32_t> owners;
+            for (const auto& function : module.program)
+                for (const auto& block : function.blocks)
+                    for (const auto& instruction : block.instructions) {
+                        if (instruction.source_address != source + 0x08u) continue;
+                        require(instruction.operation == katana::ir::Operation::CallRegister,
+                            "Shared transfer lost its original register call");
+                        owners.push_back(function.entry_address);
+                        if (first)
+                            require(instruction.resolved_targets == first->resolved_targets &&
+                                    instruction.dynamic_target_class == first->dynamic_target_class,
+                                "Physical register call acquired inconsistent owner contracts");
+                        first = &instruction;
+                        if (resume_loads_target)
+                            require(instruction.resolved_targets == std::vector<std::uint32_t>{source + 0x40u} &&
+                                    instruction.dynamic_target_class == katana::ir::DynamicTargetClass::GuardedPartial,
+                                "Agreeing local owners lost their guarded runtime-alias target");
+                        else
+                            require(instruction.resolved_targets.empty() &&
+                                    instruction.dynamic_target_class == katana::ir::DynamicTargetClass::RuntimeOnly &&
+                                    block.has_indirect_successor &&
+                                    std::find(function.direct_callees.begin(), function.direct_callees.end(),
+                                        source + 0x40u) == function.direct_callees.end(),
+                                "Unknown resume input inherited another owner's local literal proof");
+                    }
+            std::sort(owners.begin(), owners.end());
+            require(owners == std::vector<std::uint32_t>{source, source + 0x20u},
+                "Fixture did not retain both independently entered shared-call owners");
+        }
+    }
+}
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 2 && std::string_view(argv[1]) == "--overlapping-local-transfers") {
+            overlapping_local_transfer_regressions();
+            std::cout << "overlapping-local-transfers: unknown/agreed owners and repeated discovery passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--direct-callee-shapes") {
+            direct_callee_shape_regressions();
+            std::cout << "direct-callee-shapes: 5 closure/budget/cache regressions passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--conditional-callback-coverage") {
+            conditional_callback_coverage_regressions();
+            std::cout << "conditional-callback-coverage: 12 source/shape cases, 3 jump-owner cases and cache lifecycles passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--published-header-records") {
+            published_header_module_regressions();
+            std::cout << "published-header-records: 17 module regressions passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--persistent-field-copies") {
+            direct_descriptor_callback_regressions(true);
+            std::cout << "persistent-field-copies: 13 module regressions passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--resident-callback-cells") {
+            resident_callback_module_regressions();
+            std::cout << "resident-callback-cells: 9 module regressions passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--direct-descriptor-callbacks") {
+            direct_descriptor_callback_regressions();
+            std::cout << "direct-descriptor-callbacks: 11 focused regressions passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--module-entry-discovery") {
+            unhinted_module_entry_regressions();
+            std::cout << "module-entry-discovery: 9 focused regressions passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--physical-runtime-callbacks") {
+            physical_runtime_callback_regressions();
+            std::cout << "physical-runtime-callbacks: 8 focused regressions passed\n";
+            return 0;
+        }
+        if (argc == 1) {
+            direct_callee_shape_regressions();
+            direct_descriptor_callback_regressions(true);
+            direct_descriptor_callback_regressions();
+            physical_runtime_callback_regressions();
+            unhinted_module_entry_regressions();
+        }
         if (argc == 5 && std::string_view(argv[1]) == "--anchored-vectors") {
             std::ifstream input(argv[2], std::ios::binary);
             std::ifstream anchor_input(argv[4]);
@@ -1685,7 +2470,7 @@ int main(int argc, char** argv) {
         }
         if (argc == 2 && std::string_view(argv[1]) == "--anchored-vectors") {
             anchored_code_vector_regressions();
-            std::cout << "anchored-vectors: 8 focused regressions passed\n";
+            std::cout << "anchored-vectors: 8 vector cases and 3 unhinted audits passed\n";
             return 0;
         }
         if (argc == 2 && std::string_view(argv[1]) == "--bound-snapshot-vectors") {
@@ -1833,6 +2618,9 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (argc != 1) throw std::invalid_argument("Unknown test filter");
+        published_header_module_regressions();
+        resident_callback_module_regressions();
+        conditional_callback_coverage_regressions();
         bound_snapshot_vector_regressions();
         anchored_code_vector_regressions();
         callback_stack_frame_prefix_regressions();
@@ -2471,14 +3259,21 @@ int main(int argc, char** argv) {
                     untyped_registered_record_callback.final_entry_offsets
                         .end(),
                     0x40u) &&
-                !std::binary_search(
+                std::binary_search(
                     untyped_registered_record_callback.final_entry_offsets
                         .begin(),
                     untyped_registered_record_callback.final_entry_offsets
                         .end(),
+                    0x100u) &&
+                std::binary_search(
+                    untyped_registered_record_callback.callback_receiver_store_candidate_offsets.begin(),
+                    untyped_registered_record_callback.callback_receiver_store_candidate_offsets.end(),
+                    0x100u) &&
+                !std::binary_search(
+                    untyped_registered_record_callback.record_callback_proposed_offsets.begin(),
+                    untyped_registered_record_callback.record_callback_proposed_offsets.end(),
                     0x100u),
-            "Ein Callback-Sink ohne Record-ABI-Provenienz erfand einen "
-            "lokalen Folgecallback.");
+            "Bedingte lokale Callbackabdeckung wurde mit Record-ABI-Provenienz vermischt.");
 
         const std::array fallthrough_roots{0u, 0x44u};
         const std::array fallthrough_external_targets{0x8C040000u};

@@ -1,5 +1,161 @@
 # Aktueller Projektstand
 
+R354/0.49.9 ist am 11. September fertig exportiert. Linkaudit und statische
+Produktabnahme bestehen: alle 249 Module mit unveraenderten Quellbindungen,
+saemtliche alte Codebytes und 731833 Moduleinstiege (R353: 724624). Alle 120
+bei der Integration verlorenen echten Einstiege sind wiederhergestellt.
+Zwei alte ungueltige +0x380-Interior-Roots bleiben mit exakter Byte-/Owner-
+Evidence ausgeschlossen. Resident 252039 Einstiege; 52 alte Interior-Einstiege
+werden durch die drei exakt gebundenen nativen Save-Hooks ersetzt.
+
+Produkt: `private/ports/r354-complete-batch-20260911a/game.exe`, 1909079040 Bytes,
+SHA256 `cf8ae98cf75675ca4e412a0f97e11c88a2c31340d45f5ae100c700b1370336ec`.
+Pack-SHA256 `3c831c4588e31ef428e785352c0660ac4d766e0dec485406029903a0a00c9fd2`.
+Erfolgreicher Exportkern 2240844 ms, kompletter Wrapper 2258549 ms (37:39).
+Dieser ABI-Rebuild kompilierte 1025 AOT-Dateien im erfolgreichen Versuch;
+1328 Uebersetzungseinheiten insgesamt, 140 wiederverwendete Ergebnisse.
+Die vorherigen Integrations-/Abbruchversuche kommen zeitlich hinzu. Das ist
+kein Kaltwert und verfehlt das Zehn-Minuten-Ziel deutlich. Keine eigenen
+Spieltests: Chao/Twinkle-Crashfreiheit, Chao-Speicherung und beide sichtbaren
+Grafikkorrekturen bleiben im Nutzerlauf zu bestaetigen.
+
+Produkt-Evidence:
+`private/diagnostics/r354-complete-batch-20260911a/product-verification.json`.
+Der Verifier unterscheidet die echten HookDispatch-Funktionszeiger von den
+gleichadressigen booleschen Membershipswitches im generierten Dispatch.
+Der anschliessende getrennte SA2-Baselinevergleich ist abgeschlossen, ohne
+SA1-Adressen oder native Titelbindungen. PAL v1.008: Boot-Extractor liest
+alle drei Tracks und verifiziert die 1578116 Byte grosse Bootdatei in
+5,498 Sekunden. Der Hardware-Audit wurde nach180,278 Sekunden, die normale
+Kontrollflussanalyse nach900,365 Sekunden am aeusseren Messlimit beendet.
+Beide erreichen wiederholt lokale Fixpunktlimits; kein vollstaendiger
+Funktions-/Hardwarebericht. Der separate native Modulaudit der Bootbytes
+endet nach654 ms mit `analysis-context-budget-exceeded` (65536 Kontexte).
+Das engere Modulbudget ist kein Whole-Game-Portvergleich. Keine Aussage
+"null erkannte Funktionen", sondern kein abgeschlossenes zugelassenes
+AOT-Ergebnis. Kein SA2-Spielstart/Build und keine SA1-Progressaenderung.
+Evidence: `private/ports/SA2/README.md` und `baseline-20260911a/` darunter.
+Alle eigenen Build-/Analyseprozesse sind beendet. Keine weitere Analyse-
+Schleife in diesem Auftrag; lokaler produktgegateter Commit ohne Push.
+
+Vor dem Export war am11. September folgender gemeinsame Quellbatch vorbereitet;
+R353/0.49.9 bleibt das zuletzt exportierte Produkt. Der Nutzer verlangt alle
+offenen Meldungen in einem Batch und hat danach mit "ok go" den Export
+freigegeben. Neue Spieleingaben bleiben beim Nutzer. Nach R354 folgt ein
+erster separater SA2-Erkennungsvergleich in `private/ports/SA2`.
+
+- Chao Race: 31 weitere sourcegebundene Einstiegsfunktionen fuer die gemeldete
+  Zustands-/Callbackfamilie. Twinkle Circuit: ein fehlender Rendercallback.
+  Der globale Seed steigt 276 -> 308 bei erhaltenem bisherigen Praefix.
+  Beide begrenzten Familieninventuren pruefen Primary plus alle 249 Module;
+  daraus folgt keine Vollstaendigkeit des gesamten Chao-Moduls.
+- Chao-Speicherung: echte blockweise Teilreads, create-only VMU-Spielwrites,
+  freie Blockbereiche und Ergebnis-/Busyprojektion an den nativen Saveprovider.
+  Story, Chao-Daten und VMU-Spiel bleiben getrennte Dateieintraege. Der
+  Persistenztest schreibt alle drei, schliesst/oeffnet den Provider neu,
+  prueft Chao-Teilreads und Aktualisierungen sowie unveraenderte Storydaten.
+  Datum, Flags, Kapazitaet, Verifikation und Fehlfaelle sind mitgeprueft.
+- Monitor/Schalter: die Originalcallbacks setzen bereits die richtigen
+  Materialfarben. Ihr gemeinsamer SDK638-Renderer verlor aber die TSP-
+  Modulationsbits und nutzte den falschen Farbpfad. Die Korrektur erhaelt
+  den SDK-Paketzustand und seine unbeleuchteten, quantisierten Vertexfarben.
+  Beide konkreten Objekt-Callchains sind aus Originalbytes nachgewiesen.
+- SEGA-Logonaehte: Flycasts halbe Texel breite Randkorrektur gilt jetzt fuer
+  passende volltexturierte UI-Quads oberhalb 480 Pixel Renderhoehe. Geometrie,
+  Atlas-Ausschnitte und Szenengeometrie bleiben ausserhalb dieser Korrektur.
+
+Runtime-Grafikkomponente, privater Adapter, Save-SDK-Test und Manifestgenerator
+sind gezielt gebaut. UI-Randpruefung, echte Save-Persistenzpruefung, beide
+Sourcefamilien, Wrapper-Syntax und Manifestvalidierung bestehen. Der
+Speichertest prueft den nativen Provider und SDK-Helfer; die Gastregister-/RAM-
+ABI ist anhand des Quellcodes geprueft. Kein eigener Spielstart, keine Matrix,
+Nutzerabnahme der Crashes und sichtbaren Korrekturen steht aus. Der Export
+integriert auch den zuvor abgeschlossenen Analyzerbatch. Dabei wurden zwei
+Integrationsfehler konkret geschlossen: spekulative Calltargets brauchen
+auch gueltige transitive Callee-Formen; funktionslokale Literalverfeinerungen
+duerfen gemeinsame physische Transfers nur bei uebereinstimmender Evidence
+aller Owner aendern. Fehlende oder widerspruechliche Evidence behaelt den
+urspruenglichen globalen IR-Vertrag. Die strengen Backend-, Source- und
+Laufzeitchecks bleiben bestehen. Aktuelle Analyzer-ABI 80; die untenstehenden
+ABI-78-Erkennungszahlen sind historische Messungen, keine Neumessung.
+Evidence: `private/diagnostics/r354-complete-batch-20260911a/BATCH.md`,
+`private/diagnostics/r354-graphics-20260911a/monitor-switch-source-evidence.json`
+und die beiden `r354-*-family-v1`-Audits in der privaten Analyseablage.
+
+Die statische Vorabnahme gegen R353 stoppte den ersten Hostcompile:
+120 bisherige Moduleinstiege in ADV00, MINICART, SUMMARY und STG01 gingen
+durch den Analyzerwechsel verloren. Acht explizit quell-/bytegebundene
+Funktionswurzeln stellen ihre Familien wieder her; der globale Seed steigt
+308 ->316. Zwei weitere alte Einstiege +0x380 in STG05/STG08 sind belegte
+unvollstaendige Prolog-/Funktionsinteriors. Sie bleiben ausgeschlossen,
+ihre echten Besitzer und saemtliche alten Codebytes muessen erhalten sein.
+Evidence: `r354-preservation-roots-v2/preservation-roots-audit.json` und
+`r354-complete-batch-20260911a/precompile-preservation-review.json`.
+
+Der Hostbuild ist fuer diesen integrierten Analyzerbatch ein ABI-Rebuild:
+1157 AOT-Dateien laut echtem Ninjaplan. Analyzer-ABI80 steht noch im gemeinsam
+eingebundenen Runtime-ABI-Header, weshalb auch quellgleiche AOT-Dateien neu
+kompilieren. Die Wiederverwendung des generierten Codes funktioniert;
+die Trennung der Headerabhaengigkeiten bleibt eine benannte Build-P0-Luecke.
+Keine Cache-, Objekt-, Zeitstempel- oder Ninja-Logmanipulation.
+
+Am 11. September wird der Analyzerbatch auf Nutzeranordnung am jetzt
+erreichten funktionierenden Zwischenstand abgeschlossen. Die CLI 0.49.9
+ist gebaut und lauffaehig; Analyzer-ABI 78. Die automatische Erkennung
+bedingter PRS-Dateiplatzierungen ist jetzt im normalen RuntimeOnly-
+Export-Discoverypfad verdrahtet. Dateiname, Ziel und Stagingpuffer stammen
+aus aktuellen Quellbytes, Registerdatenfluss und quellgeprueften
+Sprungtabellen. Saemtliche bekannten direkten/indirekten Einstiege,
+Kandidaten und Returnpfade pruefen die Tabellenherkunft; alternative
+Einstiege und Aliasadressen duerfen den Nachweis nicht umgehen.
+Snapshotkanten bleiben ausschliesslich im lokalen bedingten Datenfluss.
+Sie werden weder feste Programm-CFG noch vollstaendiger Lade-/ABI-Proof.
+
+Frischer Primarylauf v14: unveraendert 4332 Funktionen und 493398
+Instruktionen in 48613 ms; neue Dateiaufruferkennung 1537 ms zusaetzlich.
+51 Aufrufe insgesamt, davon 43 Nicht-Chao-Aufrufe fuer 39 Dateien. Die
+acht weiteren Aufrufe betreffen nur im Primary gefundene Chao-Dateinamen;
+Chao-Module werden nicht untersucht. Zwei mehrdeutige LCD-Dateinamen aus
+dem alten Diagnosecensus werden bewusst nicht als eindeutige Argumente
+uebernommen. Beide hatten keine bekannten R353-Funktionsanfaenge.
+
+Der abschliessende Familienlauf mit diesen nativen Ergebnissen laesst
+35 von 39 Dateien zu und erzeugt 4489 Funktionen. Der nachgeschaltete
+R353-Vergleich bestaetigt 4179 von 7678 bekannten Funktionen in diesen
+35 Modulen. Gegen die vorherige Vergleichsbasis: 589 -> 4179, netto
++3590; 3851 hinzugekommene und 261 nicht wiedergefundene alte Anfaenge.
+Gegen den unmittelbar vorherigen v5-Familienlauf sind saemtliche
+Funktions-/Block-/Conditional-Entrymengen der gemeinsamen Dateien identisch.
+Die vier abgewiesenen Daten-/Pfaddateien besitzen keine R353-Funktionen.
+Die 261 frueheren Luecken bleiben offen. R353 und seine bisherigen Seeds
+bleiben unveraendert erhalten.
+
+Die fruehere Zahl von mindestens 7778 analysierten Modulfunktionen schloss
+abgewiesene Ergebnisse ein. Sie ist weder dieselbe Groesse wie die 7678
+Referenzfunktionen dieser Familie noch wie 4332 residente Funktionen.
+Vollstaendige generische Spielerkennung ist weiterhin nicht erreicht.
+Hauptanalyse zuvor 55461 ms, aktuelle Einzelmessung 48613 ms; daraus folgt
+kein gesicherter Gesamtexport- oder Kaltbuildgewinn. Der Familienlauf dauert
+45567 ms inklusive wiederholter Quellvalidierung, keine Produktmessung.
+
+SDK-/Quell-/Delay-/Ingresschecks, gezielte Conditional-Registry- und
+Cache-Lifecyclechecks sowie der vollstaendige bestehende Registrytest
+bestehen. Zwei veraltete Testannahmen wurden korrigiert: bedingte lokale
+Callbackabdeckung ist keine Record-ABI, und der Korruptionstest muss den
+aktuellen Cachekey inklusive Conditional-Domaene treffen. Alle betroffenen
+Pfade wurden gegenprueft. Kein neuer Sonic-Export, Spielstart, Commit oder
+Push; keine weiteren autonomen Analyzerzyklen nach diesem Abschluss.
+
+Aktuelle Evidence unter
+`private/diagnostics/r353-generic-recognition-20260910a/`:
+`primary-native-policy-v14-run.json`,
+`primary-native-policy-v14.conditional-files.json`,
+`conditional-coverage-native-final/run-summary.json`,
+`native-source-conditional-final-comparison-v1.json`,
+`conditional-source-wiring-sdk-tests-v5.log`,
+`conditional-source-wiring-registry-tests-focused-final.log` und
+`conditional-source-wiring-registry-tests-final-v3.log`.
+
 R353/0.49.9 ist auf Nutzerauftrag inkrementell exportiert und bildet die
 Vergleichsbasis fuer die anschliessende generische Erkennung. Ein originaler
 Chao-Effektinitialisierer, sein Update und seine Bewegungshilfe waren nicht
@@ -25,6 +181,10 @@ Evidence: `private/diagnostics/r353-chao-race-motion-20260910a/review.md` und
 
 Der aktive Folgeauftrag priorisiert vollstaendige generische Erkennung vor
 Analyse-/Exportleistung und allgemeiner Optimierung. Die eingefrorene Inventur
+bleibt unveraendert. Auf Nutzerkorrektur vom11. September wird Chao vollstaendig
+zurueckgestellt: zuerst die bestaetigten Storypfade, Chao erst ganz zum Schluss.
+Chao gilt weder als vollstaendig noch als bestaetigte Gameplayreferenz.
+Die Inventur
 enthaelt19421 Funktionen,976589 Dispatch-Einstiege und6637 Seedrecords aus27
 Dateien; nach Normalisierung sind es6469 eindeutige Records. Alle Seedbindungen
 und exakten Seed-Einstiege sind im Produkt vorhanden. Hinzu kommen301 explizite
@@ -32,12 +192,292 @@ Funktionsgrenzen,167 Sprungtabellen,62 Callbacktabellen und113 statische
 Einstiege im Spielprojekt. Diese Liste ist nur ein Vergleichsoracle und darf
 nicht als versteckte Rootquelle der generischen Erkennung dienen.
 Referenz: `private/analysis/sonic-adventure-pal-v1003/r353-generic-recognition-reference-v1/reference.json`.
-Die vollstaendige Verallgemeinerung ist noch nicht erreicht. Ein begrenzter
-Modulaudit vom Original-Konstruktor findet ohne die neuen Roots weder den
-Initialisierer noch Update/Bewegung; das gilt auch im Strict-Modulaudit.
-Naechster Schritt ist die konkrete Datenfluss-/Inventurluecke, keine blinde
-ABI-Umschaltung. Die R353-Phasenzeiten sind als unveraenderte Ausgangsmessung
-gesichert. Kein Push.
+Die vollstaendige Verallgemeinerung ist noch nicht erreicht. Aktueller
+Dirty-Analyzerstand vom11. September: explizite SH-4-Runtimealiases behalten
+ihre physischen/P2-Schreibweisen; kompakte PRS-Einstiegstabellen duerfen hinter
+Hilfscode liegen. Exakte Stackspills und feste R0-Feldindizes behalten ihre
+Herkunft. Descriptor-Argument und Callback-Receiver-ABI sind getrennt;
+Persistent-Pointer-Vertraege verlangen den unveraenderten Argumentwert.
+Dadurch entfallen591 zu breite Pointer-Vertraege (1086 -> 495). Dynamische
+Objektfeldzugriffe gelten ohne tatsächlichen Candidateverlust nicht selbst
+als verlorene Callbacktabelle. Fokussierte Vertragspruefungen bestanden.
+
+Der Source-only-Primarylauf hat unveraendert4332 Funktionen. Der erste ganze
+Vergleich mit Primarykontext (v4) fand5178 Modulfunktionen, davon4828 mit
+gleichem Funktionsanfang wie R353. Die Referenz enthaelt insgesamt13432
+Modulfunktionen, nicht4828. Dazu340041 zugelassene Blockeinstiege,
+336898 davon in R353, und2510/6285 bekannte Modul-Seedoffsets.225/251
+Bindungen zugelassen,134/249 Module deckten alle bekannten Seeds ab.
+Ohne Primarykontext waren es3095 Funktionen und2146 Seedoffsets.
+Diese Vergleiche verwenden keine Seed-/Funktionslisten als Discoveryeingaben;
+Modulidentitaeten und Runtimeplatzierungen sind jedoch vorgegeben.
+
+Der Dirty-Diff erkennt inzwischen residente Tabellenzellen, deren Werte
+als exakte Callbackargumente an eine bewiesene Factory gehen.99 Zellvertraege
+aus Primary, darunter der bislang verlorene Chao-Race-Dispatcher hinter
+Null-Luecken. Sourcezelle, Generation, Konsument und Runtimeziel bleiben
+gebunden; erst passende Modulbytes werden als Code klassifiziert. Keine
+vollstaendige Zielmenge oder neue Callback-ABI. Die12 Quell- und9 Modulfaelle
+sowie der Cache-Roundtrip bestehen. Die damalige Analyzer-ABI73 war an den
+erweiterten Quellvertrag gebunden. Der erneute Primarylauf
+v7 behaelt4332 Funktionen und312 Tabellenvertraege einschliesslich99 Zellen.
+
+Weitere gezielte Korrekturen: verschachtelte FVA-Batches fuehren ohne freie
+Worker-Lease ihre eigenen Teilaufgaben inline aus, statt fremde Rootjobs
+rekursiv auf dem Hoststack zu starten.64 Roots/1536 Teilaufgaben bestehen
+mit Tiefe1 und erhaltenen Fehler-/Leasevertraegen. Pending-Arithmetik begrenzt
+eindeutige Ergebnisse statt kartesischer Paare;53 Faelle bestehen. Pending
+aus gespeicherten Stackepochen gelangt erst nach wirklicher Dereferenzierung
+in die entsprechende Scalar-Lane;46 Namespace-/Return-/Restorefaelle bestehen.
+Direkte Stack-/Memory-Pending-Werte und echte Code-/Literal-Top bleiben erhalten.
+
+Der Gesamtvergleich v17 umfasst alle251 Bindungen/249 Module:5254 zugelassene
+Modulfunktionen,4812 R353-Funktionsanfaenge,340710 Blockeinstiege mit337442
+Referenztreffern und2502/6285 bekannte Seedoffsets.219 Bindungen zugelassen;
+weiterhin134 Module decken alle bekannten Seeds ab. Einschliesslich nicht
+zugelassener Ergebnisse sind mindestens7769 verschiedene Funktionen analysiert
+(v4:5960); fuer12 Timeouts liegt kein vollstaendiges Ergebnis vor. Analysiert
+ist keine Ausfuehrungsfreigabe. Die32 Ablehnungen verteilen sich auf12
+Timeouts,16 Candidateverluste,2 ungueltige Programme und2 unvollstaendige CFGs.
+Kein erneuter Host-Stackoverflow in diesem Lauf beobachtet.
+
+Gegen v4 sind76 zugelassene Funktionen hinzugekommen, aber16 Referenzanfaenge
+und8 Seedtreffer entfallen. Sechs zuvor kleine zugelassene Module scheitern
+jetzt an zusaetzlich erschlossenen Pfaden:ADV0100,ADV0130,AL_RACE,B_CHAOS4,
+B_E101_R undMINICART. Damit ist der neue Stand kein verlustfreier Ersatz
+der Referenz. B_CHAOS2 steigt von1 auf22 Funktionen, B_CHAOS0 von4 auf16,
+SBOARD von5 auf13 undSTG07 von120 auf141. Diese Zuwachse stammen aus dem
+gesamten Regeldelta; sie sind keiner einzelnen Stackkorrektur zuzurechnen.
+Gesamtdauer742580 ms gegen534545 ms, jeweils mit120-Sekunden-Einzellimits
+unddrei Prozessen. Das sind Diagnosezeiten, keine Export-/Kaltbuildwerte.
+Evidence: `private/diagnostics/r353-generic-recognition-20260910a/primary-context-all-v17/comparison.json`.
+
+Die folgende Feldkopie-Regel bindet unveraenderte32-Bit-Descriptorfelder an
+bewiesene Loads/Stores und das eingehende Argument. Sie erzeugt keine neue
+Callback-ABI. Arithmetik, uneindeutige Joins, schmale oder aliasierende Writes
+und durch Calls veraenderbare Spills verlieren diesen MUST-Vertrag. Die
+647 Primary-Vertraege werden erst an konkreten Modulaufrufen gebunden;
+632 passieren die externe Transportvalidierung. Kandidaten brauchen weiterhin
+eigene Code-/Source-/Runtimepruefung.16 Quellfaelle,11 Modulfaelle mit Cache-
+Invalidierung, Bootcache-Roundtrip und die vorhandenen Descriptorproben bestehen.
+Analyzer-ABI74/Bootcache19/Checkpoint5/Modulcache11 fuer diesen Lauf.
+
+Gesamtvergleich v22:5298 zugelassene Funktionen,4849 R353-Funktionsanfaenge,
+342643 Blockeinstiege mit339342 Referenztreffern und2513/6285 bekannte Seeds.
+220/251 Bindungen zugelassen,134/249 Module mit allen bekannten Seeds.
+Gegen den unmittelbar vorherigen v20-Lauf sind44 Funktionen,37 passende
+Funktionsanfaenge,1900 Referenzeinstiege und11 Seeds hinzugekommen.
+MINICART wird wieder zugelassen (40 Funktionen,33 Referenzanfaenge,10 Seeds);
+SBOARD steigt von13 auf17 Funktionen. Alle anderen Modulmetriken bleiben
+unveraendert. Mindestens7778 verschiedene Funktionen analysiert; das ist
+keine Ausfuehrungsfreigabe.31 Ablehnungen:12 Timeouts,15 Candidateverluste,
+2 ungueltige Programme und2 unvollstaendige CFGs.785486 ms gegen792539 ms
+bei gleichen Limits; daraus folgt kein gesicherter Performancegewinn.
+Evidence: `private/diagnostics/r353-generic-recognition-20260910a/primary-context-all-field-copy-v22/comparison.json`.
+
+Danach ergaenzt die FVA branch-spezifische32-Bit-Stores in BT/S-/BF/S-Delay-Slots.
+Der Store wird erst nach Eingrenzung des jeweiligen Nachfolgezustands angewandt;
+Schwesterzweige teilen keine Writes. Fehlende Nachfolger behalten den normalen
+Transfer.116 Verzweigungs-,31 Domain- und46 Stackepochenfaelle bestehen.
+
+Neue Story-Regel: zwei unabhaengige skalierte Selector behalten ihre exakten
+Load-/Ausdrucksidentitaeten bis zur residenten Tabellenzelle. Deren Header wird
+ueber eine belegte globale Zelle mit dem spaeteren Header-/Record-/Callback-
+Verbrauch verbunden. Verschobene oder verschieden maskierte Indizes verlieren
+diesen Vertrag.434 zusaetzliche Primary-Vertraege fuer217 Sourcezellen und38
+Header; alle bisherigen312 Tabellenvertraege bleiben erhalten. Unknown externe
+gerade RAM-Callbacks blockieren folgende lokale Records nicht, werden aber
+selbst weder zu Funktionen noch zu ABI-Evidence. Lokale Kandidaten benoetigen
+passende Runtime-/Sourcebytes und unabhaengige Entryshape-Pruefung. Kein Count
+oder vollstaendiger Selectorbereich wird erfunden.15 Quell-,17 Modulfaelle,
+Cache-Roundtrip/Invalidierung und12+9 bestehende Resident-Faelle bestehen.
+Aktueller Vertragsstand: Analyzer-ABI76, Bootcache20, Modulcache12.
+
+Gezielter Vergleich v26: SBOARD17 -> 60 Funktionen, B_CHAOS0 16 -> 30 und
+B_CHAOS2 22 -> 27. Zusammen62 weitere R353-Funktionsanfaenge und44 weitere
+bekannte Seedoffsets; alle drei Module zugelassen. Primary behaelt4332
+Funktionen. Der abgeschlossene Folgevergleich v27 hat die restlichen241
+Nicht-Chao-Module mit243 Bindungen geprueft. Die drei bestandenen Module aus
+v26 werden nur nach identischer aktueller CLI-, Worker-, Core- und
+Primary-Kontext-SHA wiederverwendet. Zusammen:244 Module,246 Bindungen,
+5287 zugelassene Funktionen,4846/12617 R353-Funktionsanfaenge und2524/5838
+bekannte Seedoffsets. Gegen v22 ohne Chao sind das netto25 weitere
+R353-Funktionen und32 weitere Seeds, aber86 weniger bekannte Blockeinstiege.
+MINICART erreicht nun152 analysierte Funktionen statt43, scheitert jedoch
+an Candidate-/Stackverlust; seine bisher40 zugelassenen Funktionen entfallen
+im rein generischen Vergleich. STG00 laeuft nach zusaetzlicher Discovery in
+das120-Sekunden-Limit und verliert dort seine bisherigen5 zugelassenen
+Funktionen. Das sind offene Analyse-Regressionen, keine R353-Produktverluste.
+31 Bindungen bleiben abgewiesen:14 Inventory-Verluste,13 Zeitlimits,
+2 ProgramInvalid und2 unvollstaendige Kontrollflussgraphen. Ein positiver
+Teilscan oder eine analysierte Funktion ist kein Admission-/Execution-Beleg.
+Gesamte Diagnosezeit v26+v27:831053 ms; keine Exportzeit.
+Evidence: `private/diagnostics/r353-generic-recognition-20260910a/primary-context-published-headers-v26/comparison.json`.
+Gebundener Gesamtvergleich: `private/diagnostics/r353-generic-recognition-20260910a/published-header-non-chao-comparison-v1.json`.
+
+Aktueller B_E101-Trace v28 bestaetigt den ersten Candidate-Top am Aufruf
+81055DD4 ->8105547A, anschliessend verliert die Projektion r5. Der Consumer
+benutzt den urspruenglichen r5 nur als FP-Leseadresse. Seine statische
+Provenienzmaske wird aber schon durch unbekannte MAY-Stack-Longloads auf alle
+Register erweitert; nachfolgende Stores und externe Aufrufe halten sie live.
+Sage bestaetigt die Ursache. Eine reine FP-Adressfilterung oder das Ersetzen
+der Maske durch das Stackbit waere kein sicherer Fix. Der Consumer ruft
+zudem zwei Primary-Helfer auf; ein enger MAY-Speicheransatz mit Call->Top
+loest den Pfad nicht. Daher kein solcher Patch und keine Gate-Abschwaechung.
+Der Modulpfad importiert momentan positive Primary-Callback-/Tabellenvertraege,
+aber keine vollstaendigen Primary-ABI-/Seiteneffekt-Zusammenfassungen.
+Autoritative R353-Seedroots und source-only Heuristik verwenden dadurch auch
+unterschiedliche FVA-Pfade. Ein bereits vorhandener Loader-Proof, der nur
+nicht verdrahtet wurde, ist in Audit und oeffentlicher Discovery nicht belegt.
+
+Der anschliessende Source-only-Loadercensus ermittelt nun ohne vorgegebene
+Loaderadressen, Casezahlen oder Einstiegstabellen acht Indexfamilien,
+52 Dateiaufrufe fuer42 Dateien und zwei Callbackkonsumenten. Von82
+Gleichindex-Hypothesen passen64 in die frisch entpackten Bytebereiche von31
+Dateien. Das ist keine vollstaendige Beziehungsmenge und keine Rootautoritaet.
+Dateinamen, Ziele, Wrapper und Literale kommen aus den Originalbytes; das
+R353-Oracle ist ausschliesslich im nachgeschalteten Impactvergleich beteiligt.
+Dieser Bereich umfasst27 aktuell abgewiesene Module. Die31 betroffenen Module
+enthalten7240 R353-Funktionen; im letzten generischen Vergleich waren221 davon
+zugelassen. Daraus folgt keine Zusage, alle7019 fehlenden Funktionen bereits
+mit einer Loaderregel zu gewinnen.
+
+Neu im oeffentlichen Analyzer: `NativeStagedTransformCandidate` und
+`discover_native_staged_transform_candidates`. Der enge strukturelle Vertrag
+erfasst48 Wrapperbytes, fuenf getrennt gehashte PC-Literale, den Stagingpuffer,
+den bedingten Transformationsaufruf und den abschliessenden unbedingten Aufruf.
+Er prueft alte Disassemblydaten gegen die aktuellen Quellbytes nach. Er ist
+noch kein Datei-/PRS-Effektvertrag, keine Root-, ABI- oder Placementautoritaet.
+Insbesondere muessen die Callees auch r14, r15 und den Caller-Spill erhalten;
+der syntaktische Registerpfad allein beweist das nicht. Bestehende Discovery-,
+Admission- und Cachepfade bleiben durch diese zusaetzliche API unveraendert.
+Die beiden Sourceansichten boot/postpal-main-ram enthalten denselben Wrapper;
+der sourcegebundene Primaryprobe findet ihn ausschliesslich aus boot.bin.
+51 der52 erkannten Dateiaufrufe sind jetzt mit seinem typisierten Kandidaten
+verknuepft. Globaler Vorderscan:246 Nicht-Chao-Images; kein neuer Gameexport.
+
+Eine zweite noch offene Bedingung ist nun mit Gegenbeispielen belegt:
+Loader und Callback lesen zwar dieselbe Stagezelle, der Loader kombiniert
+jedoch Stage-/Act-Words und schneidet anschliessend Bits ab. Stage=0,
+Act=0x1800 waehlt Loadercase24 und Callbackindex0; Stage=0x100, Act=0
+waehlt Loadercase0 und Callbackindex256. Deshalb derzeit null bewiesene
+Selektorgleichheiten. Eine reine Zellenueberschneidung waere unzureichend.
+Sage bestaetigt diese Grenze und die Quellidentitaetspruefung des C++-Vertrags.
+Acht Python-Semantik-/Negativchecks sowie der neue fokussierte C++-SDK-Test
+bestehen; SDK und Test inkrementell ueber den kanonischen Wrapper gebaut.
+Evidence: `private/diagnostics/r353-generic-recognition-20260910a/source-indexed-file-calls-v4.json`,
+`native-staged-transform-v1.json`, `native-staged-transform-v1-run.json`,
+`source-indexed-file-call-impact-v1.json` und `staged-transform-source-preinventory-v2.json`
+im selben Verzeichnis. Die Gesamtvergleichszahlen v26/v27 bleiben unveraendert;
+es wurden in diesem Schritt keine weiteren Moduleintritte autorisiert.
+
+Der anschliessende PRS-Schritt bindet jetzt erstmals die eigentliche
+Transformationssemantik. `recognize_native_prs_transform` prueft die komplette
+152-Byte-Tokenmaschine einschliesslich aller Zweige/Delay-Slots, Registerrollen,
+zweier separat gehashter Wortmasken und der Rueckgabe der Ausgabegroesse.
+Adressen und Registerallokation sind variabel; weder Dateinamen noch bekannte
+Spieladressen sind Eingaben der Regel. Der Vertrag ist bedingt: gueltiger PRS-
+Input, les-/schreibbarer Output und ausgerichteter Stack, disjunkte Bereiche
+einschliesslich Aliases, unveraenderte Code-/Hooksemantik. Er erteilt keine
+Root-, Load-, Generation- oder Vollstaendigkeitsautoritaet.
+
+Globaler registerunabhaengiger Scan:246 Nicht-Chao-Images, zwei Kandidaten;
+beide Originalansichten boot/postpal-main-ram werden durch die oeffentliche
+API bestaetigt. Die Quellidentitaeten bleiben vor/nach der Pruefung gleich.
+Im Loadercensus v5 besitzen alle51 staged Dateiaufrufe nun den passenden
+PRS-Quellvertrag, frisch validierte komprimierte/dekomprimierte Identitaeten
+und disjunkte Eingabe-/Ausgabespannen. Das schliesst die PRS-Formatfrage,
+nicht die noch fehlenden Aufruf-/SDK-Vertraege. Der Simulator/Produktexport
+ist unveraendert. R353-Referenzcoverage bleibt bei den v26/v27-Zahlen.
+
+Sage hat einen wichtigen Unterschied zwischen Original und nativem Ersatz
+bestaetigt: Der originale benannte Dateilader prueft nur das Open-Handle,
+ignoriert aber Size-, Read- und Close-Fehler. Ein nichtnegatives Wrapperresultat
+allein beweist deshalb keinen erfolgreichen Read. Der native Ersatz liefert
+seinen Erfolgswert erst nach dem vollstaendigen authentifizierten Copy;
+Sage bestaetigt die GPR-Erhaltung der verschachtelten Retirement-Aufrufe
+einschliesslich r14/r15. Caller-Stackspills sind dagegen nicht allgemein
+geschuetzt: das Sektorpadding und die erhaltenen Gast-Speicherwirkungen von
+Destruktoren/SDK-Releases brauchen einen eigenen Nichtueberlappungsbeleg oder
+eine entsprechende Laufzeitbedingung. Fehler koennen bereits erfolgte
+Retirement-Wirkungen behalten. Der Ersatz ist daher kein reiner memcpy-
+Vertrag. Diese Grenzen sind in `native-content-copy-source-audit-v1.json`
+mit aktuellen Quell-/Hookidentitaeten dokumentiert; noch keine produktive
+SDK-Effektdeklaration oder ausgeweitete Admission.
+Selectorzuordnung, vollstaendiger SDK-Ladeeffekt und Finalizer bleiben offen.
+
+Gezielter SDK-/Testbuild bestanden, finale Runde ohne Compilerwarnungen;
+synthetische Relokation/Registerumbenennung, Mutation jeder erreichbaren
+Instruktion, falsche Masken/Branches/Delay-Slots/Spans und bisherige Wrapper-
+Checks bestehen. Neun private Symbolik-/Aliaschecks bestehen. Kein Vollscan
+mit FVA, kein neuer Produktexport und keine Wiederholung der Levelmatrix.
+Evidence im selben Diagnoseverzeichnis: `source-indexed-file-calls-v5.json`,
+`native-staged-transform-v2.json` samt Runreceipt,
+`native-staged-transform-postpal-v2.json` samt Runreceipt,
+`prs-transform-global-validation-v1.json` und `prs-transform-build-v2.log`.
+
+Der naechste Schritt trennt bedingte Compile-Abdeckung von Lade- und
+Erreichbarkeitsbeweisen. `LatentAotConditionalModulePlacement` bindet
+komprimierte/dekomprimierte Identitaeten und Groessen, moegliche Zielbasis
+und Quellableitung. Der RuntimeOnly-Pfad kann damit bereits typisierte
+residente Callbackzellen auf aktuelle Modulbytes projizieren. Nur exakt
+gebundene und unabhaengig auf Codeform gepruefte Ziele werden Kandidaten.
+Die kleinste bestaetigte Callbackadresse startet die lokale Erkennung;
+weitere Zellen werden erst nach deren Fixpunkt nachgezogen. Offset null ist
+kein pauschaler Einstieg. Die moegliche Basis wird kein CFA-Adressalias,
+kein erfolgreicher Loader, keine Callback-ABI und keine vollstaendige
+Zielmenge. Strict und die separate Loader-Tail-Autoritaet bleiben unveraendert.
+Analyzer-ABI 77 und Static-Modulcache 13 binden die neue Provenance samt
+vollstaendiger Kandidatenmenge und Ableitungsidentitaet.
+
+Die frische Quelltransportpruefung validiert alle 99 residenten Primaryzellen,
+51 staged Dateiaufrufe und deren urspruengliche Code-/Literal-/Dateiinputs.
+Im v5-Familienlauf werden 41 Nicht-Chao-Dateien ohne Referenzroots und ohne
+bewiesene Runtimebasis untersucht, mit frei gewaehlter Analysebasis.
+35 Dateien sind zugelassen; dies sind alle 35 mit R353-Referenzfunktionen
+in dieser Familie. Die sechs uebrigen Dateien bleiben abgewiesen und haben
+keine bekannten R353-Funktionsanfaenge. Laufzeit 22448 ms mit drei Workern;
+das ist eine Diagnosezeit, keine Export- oder Kaltbuildmessung.
+
+Der nachtraegliche R353-Vergleich findet 4179/7678 bekannte Funktionen in
+dieser Familie, gegen 589 in v26/v27. 3851 bekannte Anfaenge sind hinzugekommen,
+261 fruehere werden unter den schwaecheren neuen Eingaben nicht wiedergefunden:
+ADVERTISE 247, STG07 sieben, B_CHAOS0 drei und B_CHAOS2 vier. Nettodelta 3590;
+4489 Funktionen werden insgesamt emittiert. Die alten Laeufe hatten explizit
+vorgegebene Runtimeplatzierungen und andere Analyseadressen. Deshalb ist dies
+kein verlustfreier Ersatz und keine Aussage ueber die gesamte Spielabdeckung.
+Die alte Evidence und R353 bleiben erhalten. Zu diesem damaligen Stand war
+der generische Registryverbraucher implementiert, der Sourcecensus jedoch
+noch ein privater Diagnoseproducer. Die automatische Verdrahtung und deren
+abschliessende Pruefung sind im aktuellen Abschluss oben dokumentiert.
+
+Der Familienlauf fand ausserdem einen generischen IR-Ownerfehler: Die spaete
+Literalaufloesung akzeptierte bei Registerspruengen jeden global bekannten
+Block, obwohl die Sourcepruefung nur eigene Bloecke oder Funktionseinstiege
+zulaesst. Beide Bedingungen stimmen jetzt ueberein. Fremde Innenbloecke
+erhalten keine feste IR-Kante; der originale Registersprung bleibt bestehen.
+STG06 wird dadurch mit 192 Funktionen und 13266 Blockeinstiegen zugelassen,
+davon 183 R353-Funktionsanfaenge. Gegen v4 verliert keine andere Datei dieser
+Familie emittierte Funktionen. Quellvorinventur: 246 Nicht-Chao-Ansichten mit
+stabilen Vorher-/Nachher-Hashes; die 12177 Literal-Jump-Prefiltertreffer sind
+ausdruecklich keine Funktions- oder Rootbeweise. 12 Quell-/Shapefaelle,
+drei Ownerfaelle jeweils kalt/aus Staticcache und 26 bestehende Literal-
+Transferfaelle bestehen. Gezielter Build erfolgreich; vorhandene Testwarnings
+bleiben unveraendert. Keine Runtime-, Spielgrafik- oder Saveaenderung.
+
+Evidence: `conditional-coverage-v5-family/run-summary.json`,
+`conditional-callback-coverage-comparison-v3.json`,
+`conditional-resident-callback-preinventory-v1.json`,
+`literal-register-jump-source-family-prescan-v1.json`,
+`conditional-coverage-tests-v5.log` und
+`literal-jump-owner-transfers-tests-v1.log` unter
+`private/diagnostics/r353-generic-recognition-20260910a/`.
+
+Chao wird auf ausdruecklichen Nutzerwunsch erst ganz am Schluss weiter
+bearbeitet. Die vorhandenen AL_MAIN-/AL_RACE-Diagnosen bleiben erhalten,
+belegen aber weder vollstaendige Erkennung noch vollstaendiges Gameplay.
+R353, Saves und Seedlisten bleiben unveraendert; kein weiterer Produktexport,
+Spielstart oder Commit in diesem Diagnosezyklus. Kein Push.
 
 Stand nach zwei weiteren r351-Crashes: r352/0.49.9 inkrementell exportiert.
 Der Menuepfad nach dem Opening verwendet den noch ausgewaehlten Super Sonic

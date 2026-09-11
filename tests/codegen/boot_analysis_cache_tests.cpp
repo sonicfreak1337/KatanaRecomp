@@ -126,6 +126,18 @@ int main() {
     try {
         const auto image = make_image();
         auto artifact = make_artifact(image);
+        artifact.analysis.static_persistent_field_copies.push_back(
+            {image_base, image_base+2u, image_base+4u, 12, 1u, 4u});
+        artifact.analysis.static_callback_field_sinks.push_back(
+            {image_base, image_base, image_base, 8, 4u, true, 0u, 2u});
+        artifact.analysis.static_callback_record_tables.push_back(
+            {image_base,image_base,image_base,image_base,0,4u,0,2u,4u,
+             katana::analysis::CallbackRecordTableSource::ResidentCallbackCell,0u,
+             image_base+0x100u,image_base+0x108u,0x8cb80040u});
+        artifact.analysis.static_callback_record_tables.push_back(
+            {image_base,image_base,image_base,image_base,4,20u,12,2u,4u,
+             katana::analysis::CallbackRecordTableSource::PublishedHeaderRecords,0u,
+             0x8c780008u,image_base+0x110u,0x8c900040u});
         const auto key = katana::codegen::make_boot_analysis_cache_key(
             image, nullptr, "test-contract", std::string(64u, 'a'));
         katana::analysis::AnalysisOverrides external_entry_overrides;
@@ -212,6 +224,15 @@ int main() {
             auto canonical_parsed =
                 katana::codegen::parse_boot_analysis_cache(
                     key, canonical);
+            require(canonical_parsed.artifact.analysis.static_callback_field_sinks ==
+                        artifact.analysis.static_callback_field_sinks,
+                    "Descriptor base argument did not round-trip through boot cache");
+            require(canonical_parsed.artifact.analysis.static_persistent_field_copies ==
+                        artifact.analysis.static_persistent_field_copies,
+                    "Persistent field-copy provenance did not round-trip through boot cache");
+            require(canonical_parsed.artifact.analysis.static_callback_record_tables ==
+                        artifact.analysis.static_callback_record_tables,
+                    "Resident callback-cell source or target did not round-trip through boot cache");
             require(
                 canonical_parsed.state ==
                         katana::codegen::BootAnalysisCacheState::Hit &&

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/analysis/control_flow_analysis.hpp"
+#include "katana/analysis/function_analysis.hpp"
 #include "katana/io/executable_image.hpp"
 
 #include <span>
@@ -11,6 +12,25 @@
 namespace katana::analysis::detail {
 
 class GuardedNativeEntryShapeCache;
+
+struct StaticSourceConstantCall final {
+    std::uint32_t function_address = 0u;
+    std::uint32_t call_instruction_address = 0u;
+    std::uint32_t callee_address = 0u;
+    std::array<std::optional<std::uint32_t>, 4> arguments;
+};
+
+// Conditional, intraprocedural source flow under SH-C callee-save semantics.
+// Only immediate/PC-literal/register expressions survive; memory and spills
+// supply no constant argument authority. All visits to a callsite must agree.
+// The caller supplies the current, source-validated CFG including resolved
+// table edges. No graph/selector completeness, file load or entry is proved.
+[[nodiscard]] std::vector<StaticSourceConstantCall>
+discover_source_constant_calls(
+    const katana::io::ExecutableImage& image,
+    std::span<const BasicBlock> blocks,
+    std::span<const FunctionInfo> functions,
+    std::span<const std::uint32_t> recognized_callees);
 
 struct StaticExternalLiteralTransferCandidate final {
     std::uint32_t call_instruction_address = 0u;
@@ -93,7 +113,8 @@ class StaticCallbackInventorySession final {
         std::vector<StaticPersistentPointerSinkContract>*,
         std::vector<StaticCallbackFieldSinkContract>*,
         std::vector<StaticCallbackRecordTableContract>*,
-        StaticCallbackInventorySession*);
+        StaticCallbackInventorySession*,
+        std::vector<PersistentFieldCopyContract>*);
 };
 
 // Returns the sorted, unique record-field displacements which feed an
@@ -125,6 +146,7 @@ discover_static_callback_field_offsets(
         callback_field_sink_contracts = nullptr,
     std::vector<StaticCallbackRecordTableContract>*
         callback_record_table_contracts = nullptr,
-    StaticCallbackInventorySession* session = nullptr);
+    StaticCallbackInventorySession* session = nullptr,
+    std::vector<PersistentFieldCopyContract>* persistent_field_copies = nullptr);
 
 } // namespace katana::analysis::detail

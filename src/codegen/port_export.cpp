@@ -25773,7 +25773,7 @@ latent_aot_declared_external_callback_sinks(
                  sink.displacement,
                  sink.width,
                  sink.call,
-                 sink.receiver_argument_mask});
+                 sink.receiver_argument_mask, sink.base_argument_mask});
         }
         std::sort(callback_field_sinks->begin(),
                   callback_field_sinks->end(),
@@ -25809,7 +25809,10 @@ latent_aot_analyzed_external_callback_sinks(
     std::vector<LatentAotExternalPersistentPointerSink>* const
         persistent_pointer_sinks = nullptr,
     std::vector<LatentAotExternalCallbackRecordTable>* const
-        callback_record_tables = nullptr) {
+        callback_record_tables = nullptr,
+    std::vector<katana::analysis::PersistentFieldCopyContract>* const
+        persistent_field_copies = nullptr) {
+    if (persistent_field_copies != nullptr) persistent_field_copies->clear();
     if (callback_field_sinks != nullptr) callback_field_sinks->clear();
     if (persistent_pointer_sinks != nullptr)
         persistent_pointer_sinks->clear();
@@ -25826,6 +25829,9 @@ latent_aot_analyzed_external_callback_sinks(
         fallback_persistent_pointers;
     std::vector<katana::analysis::StaticCallbackRecordTableContract>
         fallback_record_tables;
+    std::vector<katana::analysis::PersistentFieldCopyContract> fallback_field_copies;
+    auto discovered_field_copies = std::span<const katana::analysis::PersistentFieldCopyContract>(
+        analysis.static_persistent_field_copies);
     auto discovered = std::span<const katana::analysis::StaticCallbackSinkContract>(
         analysis.static_callback_sinks);
     auto discovered_fields =
@@ -25858,14 +25864,37 @@ latent_aot_analyzed_external_callback_sinks(
                 &fallback_discovered,
                 &fallback_persistent_pointers,
                 &fallback_discovered_fields,
-                &fallback_record_tables));
+                &fallback_record_tables,
+                nullptr,
+                &fallback_field_copies));
         discovered = fallback_discovered;
         discovered_fields = fallback_discovered_fields;
         discovered_persistent_pointers = fallback_persistent_pointers;
         discovered_record_tables = fallback_record_tables;
+        discovered_field_copies = fallback_field_copies;
     }
 
     std::map<std::uint32_t, std::pair<std::uint8_t, std::uint8_t>> masks;
+    if (persistent_field_copies != nullptr) {
+        for (const auto& copy : discovered_field_copies) {
+            const auto function = latent_aot_external_code_address(copy.function_address);
+            const auto load = latent_aot_external_code_address(copy.load_instruction_address);
+            const auto store = latent_aot_external_code_address(copy.store_instruction_address);
+            if (!function || !load || !store || copy.argument >= 4u || copy.width != 4u ||
+                copy.displacement < 0 || copy.displacement > 4096 || (copy.displacement & 3) != 0 ||
+                !image.resolve_segment_address(copy.function_address, 2u) ||
+                !image.resolve_segment_address(copy.load_instruction_address, 2u) ||
+                !image.resolve_segment_address(copy.store_instruction_address, 2u) ||
+                !std::binary_search(external_code_targets.begin(), external_code_targets.end(), *function))
+                continue;
+            persistent_field_copies->push_back(
+                {*function, *load, *store, copy.displacement, copy.argument, copy.width});
+        }
+        std::sort(persistent_field_copies->begin(), persistent_field_copies->end());
+        persistent_field_copies->erase(
+            std::unique(persistent_field_copies->begin(), persistent_field_copies->end()),
+            persistent_field_copies->end());
+    }
     for (const auto& sink : discovered) {
         const auto external =
             latent_aot_external_code_address(sink.function_address);
@@ -25923,7 +25952,7 @@ latent_aot_analyzed_external_callback_sinks(
                 continue;
             callback_field_sinks->push_back(
                 {*function, *call, *load, sink.displacement, sink.width,
-                 sink.call, sink.receiver_argument_mask});
+                 sink.call, sink.receiver_argument_mask, sink.base_argument_mask});
         }
         std::sort(callback_field_sinks->begin(),
                   callback_field_sinks->end(),
@@ -25962,13 +25991,44 @@ latent_aot_analyzed_external_callback_sinks(
                                           table.vector_address);
             const bool static_vector = table.source_kind ==
                 katana::analysis::CallbackRecordTableSource::StaticVectorAddress;
+            if (table.source_kind == katana::analysis::CallbackRecordTableSource::ResidentCallbackCell ||
+                table.source_kind == katana::analysis::CallbackRecordTableSource::PublishedHeaderRecords) {
+                const bool header = table.source_kind ==
+                    katana::analysis::CallbackRecordTableSource::PublishedHeaderRecords;
+                const auto base = image.resolve_segment_address(
+                    header ? table.resident_cell_address : table.vector_address, 4u);
+                const auto cell = image.resolve_segment_address(table.resident_cell_address, 4u);
+                if (!base.has_value() || !cell.has_value()) continue;
+                const auto* source = image.find_segment(*base, 4u);
+                if (source == nullptr || !source->permissions.readable ||
+                    image.find_segment(*cell, 4u) != source) continue;
+                const auto* bound = image.find_immutable_range(*base, 4u);
+                const bool immutable = bound != nullptr && !bound->identity.empty() &&
+                    bound->generation == image.immutable_generation();
+                const bool committed_source = !source->local_source_name.empty() &&
+                    (source->source_kind == katana::io::ImageSourceKind::RawBinary ||
+                     source->source_kind == katana::io::ImageSourceKind::ElfLoadSegment ||
+                     source->source_kind == katana::io::ImageSourceKind::DiscBootFile ||
+                     source->source_kind == katana::io::ImageSourceKind::DiscModule);
+                if ((!immutable && !committed_source) ||
+                    (immutable && image.find_immutable_range(*cell, 4u) != bound) ||
+                    (!header && table.callback_displacement != 0)) continue;
+                const auto offset = source->byte_offset(*cell);
+                if (!offset.has_value() || *offset > source->bytes.size() ||
+                    4u > source->bytes.size() - *offset) continue;
+                const auto raw = image.read_u32_le(*cell);
+                const auto target = latent_aot_external_code_address(raw);
+                if (!target.has_value() || *target != table.resident_target_address) continue;
+            }
             if (!function.has_value() || !call.has_value() ||
                 !load.has_value() || !sink.has_value() ||
                 !vector.has_value() ||
                 table.width != 4u || table.callback_argument >= 4u ||
                 !katana::analysis::valid_callback_table_source(
                     table.source_kind, table.table_argument,
-                    table.header_table_pointer_displacement, *vector) ||
+                    table.header_table_pointer_displacement, *vector,
+                    table.resident_cell_address, table.resident_target_address,
+                    table.record_stride) ||
                 *vector != table.vector_address ||
                 (static_vector && *sink != *function) ||
                 table.callback_displacement < 0 ||
@@ -25997,7 +26057,7 @@ latent_aot_analyzed_external_callback_sinks(
                  table.width,
                  table.source_kind,
                  table.table_argument,
-                 *vector});
+                 *vector, table.resident_cell_address, table.resident_target_address});
         }
         std::sort(
             callback_record_tables->begin(),
@@ -26015,7 +26075,8 @@ latent_aot_analyzed_external_callback_sinks(
                            left.width,
                            left.source_kind,
                            left.table_argument,
-                           left.vector_address) <
+                           left.vector_address, left.resident_cell_address,
+                           left.resident_target_address) <
                        std::tie(
                            right.function_address,
                            right.call_instruction_address,
@@ -26028,7 +26089,8 @@ latent_aot_analyzed_external_callback_sinks(
                            right.width,
                            right.source_kind,
                            right.table_argument,
-                           right.vector_address);
+                           right.vector_address, right.resident_cell_address,
+                           right.resident_target_address);
             });
         callback_record_tables->erase(
             std::unique(callback_record_tables->begin(),
@@ -26062,12 +26124,16 @@ latent_aot_materialized_callback_consumer_primary_targets(
     // ordinary field sinks before exposing the contracts to loaded AOT.
     // This admits the authenticated consumer, never the vector's raw targets.
     for (const auto& table : analysis.static_callback_record_tables) {
-        if (table.source_kind !=
-                katana::analysis::CallbackRecordTableSource::StaticVectorAddress ||
+        const bool resident = table.source_kind ==
+            katana::analysis::CallbackRecordTableSource::ResidentCallbackCell ||
+            table.source_kind == katana::analysis::CallbackRecordTableSource::PublishedHeaderRecords;
+        if ((!resident && table.source_kind !=
+                katana::analysis::CallbackRecordTableSource::StaticVectorAddress) ||
             !katana::analysis::valid_callback_table_source(
                 table.source_kind, table.table_argument,
-                table.header_table_pointer_displacement, table.vector_address) ||
-            table.callback_sink_address != table.function_address ||
+                table.header_table_pointer_displacement, table.vector_address,
+                table.resident_cell_address, table.resident_target_address, table.record_stride) ||
+            (!resident && table.callback_sink_address != table.function_address) ||
             table.width != 4u || table.callback_argument >= 4u ||
             table.record_stride < 4u || table.record_stride > 256u ||
             (table.record_stride & 3u) != 0u ||
@@ -26095,7 +26161,8 @@ latent_aot_materialized_callback_consumer_primary_targets(
     const auto consumer_key = [](const auto& sink) {
         return std::tie(sink.function_address, sink.call_instruction_address,
                         sink.load_instruction_address, sink.displacement,
-                        sink.width, sink.call, sink.receiver_argument_mask);
+                        sink.width, sink.call, sink.receiver_argument_mask,
+                        sink.base_argument_mask);
     };
     std::sort(sinks.begin(), sinks.end(), [&](const auto& left, const auto& right) {
         return consumer_key(left) < consumer_key(right);
@@ -26303,8 +26370,9 @@ latent_aot_materialized_callback_consumer_primary_targets(
                          MovLongLoadDisplacement &&
                  load->instruction.displacement == sink->displacement) ||
                 (sink->displacement == 0 &&
-                 load->instruction.kind ==
-                     katana::sh4::InstructionKind::MovLongLoad);
+                 (load->instruction.kind == katana::sh4::InstructionKind::MovLongLoad ||
+                  load->instruction.kind == katana::sh4::InstructionKind::MovLongLoadR0Indexed ||
+                  load->instruction.kind == katana::sh4::InstructionKind::MovLongLoadPostIncrement));
             const auto call_matches =
                 sink->call
                     ? call->instruction.kind ==
@@ -26400,6 +26468,8 @@ merge_latent_aot_external_callback_field_sinks(
                 static_cast<std::uint8_t>(
                     merged.back().receiver_argument_mask |
                     sink.receiver_argument_mask);
+            merged.back().base_argument_mask = static_cast<std::uint8_t>(
+                merged.back().base_argument_mask | sink.base_argument_mask);
         } else {
             merged.push_back(sink);
         }
@@ -26486,7 +26556,9 @@ LatentAotDiscoveryOptions port_latent_aot_discovery_options(
     const std::span<const LatentAotExternalCallbackRecordTable>
         external_callback_record_tables,
     const std::span<const LatentAotExternalLiteralTransferCandidate>
-        external_literal_transfer_candidates) {
+        external_literal_transfer_candidates,
+    const std::span<const katana::analysis::PersistentFieldCopyContract>
+        external_persistent_field_copies = {}) {
     LatentAotDiscoveryOptions result;
     result.mode = options.latent_aot_discovery_mode;
     // Full product export owns an occupied-range inventory for every primary
@@ -26532,6 +26604,7 @@ LatentAotDiscoveryOptions port_latent_aot_discovery_options(
     result.external_persistent_pointer_sinks =
         external_persistent_pointer_sinks;
     result.external_callback_field_sinks = external_callback_field_sinks;
+    result.external_persistent_field_copies = external_persistent_field_copies;
     result.external_callback_record_tables =
         external_callback_record_tables;
     result.external_literal_transfer_candidates =
@@ -45162,6 +45235,8 @@ NativeDiscAnalysisResult analyze_native_disc_port(
             analyzed_external_persistent_pointer_sinks;
         std::vector<LatentAotExternalCallbackRecordTable>
             analyzed_external_callback_record_tables;
+        std::vector<katana::analysis::PersistentFieldCopyContract>
+            analyzed_external_persistent_field_copies;
         const auto analyzed_external_callback_sinks =
             latent_aot_analyzed_external_callback_sinks(
                 image,
@@ -45169,7 +45244,8 @@ NativeDiscAnalysisResult analyze_native_disc_port(
                 declared_external_targets,
                 &analyzed_external_callback_field_sinks,
                 &analyzed_external_persistent_pointer_sinks,
-                &analyzed_external_callback_record_tables);
+                &analyzed_external_callback_record_tables,
+                &analyzed_external_persistent_field_copies);
         const auto external_callback_sinks =
             merge_latent_aot_external_callback_sinks(
                 declared_external_callback_sinks,
@@ -45194,6 +45270,8 @@ NativeDiscAnalysisResult analyze_native_disc_port(
                     analyzed_external_persistent_pointer_sinks.size()) +
                 ":field-sinks=" +
                 std::to_string(external_callback_field_sinks.size()) +
+                ":field-copies=" +
+                std::to_string(analyzed_external_persistent_field_copies.size()) +
                 ":record-tables=" +
                 std::to_string(
                     analyzed_external_callback_record_tables.size()) +
@@ -45229,7 +45307,7 @@ NativeDiscAnalysisResult analyze_native_disc_port(
             "latent-aot-primary-literal-transfers:" +
                 std::to_string(literal_transfer_candidates.size()) +
                 ":iteration=" + std::to_string(iteration));
-        const auto discovery_options = port_latent_aot_discovery_options(
+        auto discovery_options = port_latent_aot_discovery_options(
             options,
             analysis_mode,
             declared_external_targets,
@@ -45238,7 +45316,16 @@ NativeDiscAnalysisResult analyze_native_disc_port(
             analyzed_external_persistent_pointer_sinks,
             external_callback_field_sinks,
             analyzed_external_callback_record_tables,
-            literal_transfer_candidates);
+            literal_transfer_candidates,
+            analyzed_external_persistent_field_copies);
+        const auto conditional_files =
+            discovery_options.completeness_policy == LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss
+                ? katana::analysis::discover_native_conditional_file_placements(
+                    image, prepared_analysis.artifact.analysis)
+                : std::vector<katana::analysis::NativeConditionalFilePlacement>{};
+        discovery_options.conditional_file_placements = conditional_files;
+        report_progress(options, "latent-aot-conditional-source-files:" +
+            std::to_string(conditional_files.size()) + ":iteration=" + std::to_string(iteration));
         report_progress(
             options,
             "latent-aot-discovery-fixpoint:" +

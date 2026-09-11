@@ -1,5 +1,9 @@
 #include "katana/analysis/native_sdk_provider_analysis.hpp"
 
+#include "static_callback_inventory.hpp"
+#include "global_entry_predecessor_index.hpp"
+#include "jump_table_analysis_internal.hpp"
+
 #include "katana/io/binary_reader.hpp"
 #include "katana/io/input_provenance.hpp"
 #include "katana/sh4/decoder.hpp"
@@ -979,6 +983,97 @@ void append_candidate(
             "Native SDK provider candidate budget exceeded.");
 }
 
+// Exact register/stack flow of a small staged transform wrapper. The concrete
+// buffer, all callees and literal-pool offsets are derived from the source;
+// there are no title addresses, file names or SDK symbol guesses here.
+[[nodiscard]] std::optional<NativeStagedTransformCandidate>
+staged_transform_candidate(
+    const katana::io::ExecutableImage& image,
+    const std::span<const Line> lines) {
+    constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 24u> shape{{
+        {0xffffu, 0x2fe6u}, {0xffffu, 0x4f22u}, // preserve r14/PR
+        {0xffffu, 0x7ffcu}, {0xffffu, 0x2f52u}, // spill original r5
+        {0xff00u, 0xd500u}, {0xf000u, 0xb000u}, {0xffffu, 0x0009u},
+        {0xffffu, 0x6e03u}, {0xffffu, 0x4e11u}, {0xffffu, 0x8b03u},
+        {0xff00u, 0xd300u}, {0xff00u, 0xd400u},
+        {0xffffu, 0x430bu}, {0xffffu, 0x65f2u}, // restore r5 in delay slot
+        {0xff00u, 0xd200u}, {0xff00u, 0xd300u},
+        {0xffffu, 0x223bu}, {0xffffu, 0x420bu}, {0xffffu, 0x0009u},
+        {0xffffu, 0x60e3u}, {0xffffu, 0x7f04u},
+        {0xffffu, 0x4f26u}, {0xffffu, 0x000bu}, {0xffffu, 0x6ef6u}
+    }};
+    if (lines.size() != shape.size() || !contiguous(lines) ||
+        (lines.front().address & 1u) != 0u ||
+        lines.front().address > std::numeric_limits<std::uint32_t>::max() - 48u)
+        return std::nullopt;
+    for (std::size_t i = 0u; i < shape.size(); ++i) {
+        if ((lines[i].opcode & shape[i].first) != shape[i].second)
+            return std::nullopt;
+        const auto resolved = image.resolve_segment_address(lines[i].address, 2u);
+        if (!resolved.has_value()) return std::nullopt;
+        const auto* segment = image.find_segment(*resolved, 2u);
+        if (segment == nullptr || !segment->permissions.executable)
+            return std::nullopt;
+        const auto offset = segment->byte_offset(*resolved);
+        if (!offset.has_value() || *offset > segment->bytes.size() ||
+            segment->bytes.size() - *offset < 2u ||
+            katana::io::read_u16_le(segment->bytes, *offset) != lines[i].opcode)
+            return std::nullopt;
+    }
+    const auto identity = code_identity(image, lines.front().address, 48u);
+    if (!identity.has_value()) return std::nullopt;
+    NativeStagedTransformCandidate result;
+    result.entry_address = lines.front().address;
+    result.covered_size = 48u;
+    result.code_identity = *identity;
+    for (const auto index : {4u, 10u, 11u, 14u, 15u}) {
+        const auto& line = lines[index];
+        const auto expanded = (static_cast<std::uint64_t>(line.address) + 4u) & ~3ull;
+        const auto address = expanded + (line.opcode & 0xffu) * 4u;
+        if (address > std::numeric_limits<std::uint32_t>::max() - 3u)
+            return std::nullopt;
+        const auto literal_address = static_cast<std::uint32_t>(address);
+        const auto resolved = image.resolve_segment_address(literal_address, 4u);
+        if (!resolved.has_value()) return std::nullopt;
+        const auto* segment = image.find_segment(*resolved, 4u);
+        if (segment == nullptr || !segment->permissions.readable)
+            return std::nullopt;
+        const auto offset = segment->byte_offset(*resolved);
+        const auto literal_identity = code_identity(image, literal_address, 4u);
+        if (!offset.has_value() || *offset > segment->bytes.size() ||
+            segment->bytes.size() - *offset < 4u || !literal_identity.has_value())
+            return std::nullopt;
+        const auto value = static_cast<std::uint32_t>(
+            katana::io::read_u16_le(segment->bytes, *offset)) |
+            (static_cast<std::uint32_t>(
+                katana::io::read_u16_le(segment->bytes, *offset + 2u)) << 16u);
+        result.literals.push_back({line.address, literal_address, value, *literal_identity});
+    }
+    // Require exact staging-address equality. Alias equivalence, buffer
+    // mutability and content extents are separate contracts, not guesses.
+    if (result.literals[0u].value == 0u ||
+        result.literals[0u].value != result.literals[2u].value)
+        return std::nullopt;
+    result.staging_buffer_address = result.literals[0u].value;
+    result.stage_call_address = lines[5u].address;
+    const auto call = katana::sh4::decode(lines[5u].opcode);
+    const auto target = katana::sh4::calculate_direct_branch_target(
+        call, lines[5u].address);
+    if (!target.has_value()) return std::nullopt;
+    result.stage_target_address = *target;
+    result.transform_call_address = lines[12u].address;
+    result.transform_target_address = result.literals[1u].value;
+    result.finalizer_call_address = lines[17u].address;
+    result.finalizer_target_address =
+        result.literals[3u].value | result.literals[4u].value;
+    if (result.transform_target_address == 0u ||
+        (result.transform_target_address & 1u) != 0u ||
+        result.finalizer_target_address == 0u ||
+        (result.finalizer_target_address & 1u) != 0u)
+        return std::nullopt;
+    return result;
+}
+
 void canonicalize(std::vector<NativeSdkProviderCandidate>& result) {
     std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) {
         return std::tuple{left.entry_address, left.family, left.covered_size} <
@@ -1055,6 +1150,404 @@ void scan_decoded_window(
 }
 
 } // namespace
+
+std::optional<NativePrsTransformContract> recognize_native_prs_transform(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t entry_address) {
+    constexpr std::uint32_t body_bytes = 152u;
+    if ((entry_address & 1u) != 0u ||
+        entry_address > std::numeric_limits<std::uint32_t>::max() - body_bytes)
+        return std::nullopt;
+    const auto resolved = image.resolve_segment_address(entry_address, body_bytes);
+    if (!resolved.has_value()) return std::nullopt;
+    const auto* segment = image.find_segment(*resolved, body_bytes);
+    if (segment == nullptr || !segment->permissions.executable ||
+        !segment->permissions.readable)
+        return std::nullopt;
+    const auto offset = segment->byte_offset(*resolved);
+    if (!offset.has_value() || *offset > segment->bytes.size() ||
+        segment->bytes.size() - *offset < body_bytes)
+        return std::nullopt;
+    const auto lines = katana::sh4::disassemble(
+        std::span<const std::uint8_t>(segment->bytes).subspan(*offset, body_bytes),
+        entry_address);
+    if (lines.size() != body_bytes / 2u) return std::nullopt;
+
+    // Bind semantic roles, allowing register allocation to change. r0 is
+    // fixed by AND-immediate/return and r15 by the ordinary stack contract.
+    std::array<std::uint32_t, 16u> reg{};
+    reg[0u] = 0u;
+    reg[1u] = lines[10u].instruction.destination_register; // copied byte
+    reg[2u] = lines[41u].instruction.destination_register; // backward source
+    reg[3u] = lines[7u].instruction.destination_register;  // original output
+    reg[4u] = lines[4u].instruction.source_register;       // encoded input
+    reg[5u] = lines[7u].instruction.source_register;       // decoded output
+    reg[6u] = lines[4u].instruction.destination_register;  // control bits
+    reg[7u] = lines[5u].instruction.destination_register;  // remaining bits
+    reg[8u] = lines[1u].instruction.source_register;       // 13-bit mask
+    reg[9u] = lines[0u].instruction.source_register;       // 8-bit mask
+    reg[15u] = 15u;
+    std::uint16_t used = 1u << 15u;
+    for (std::size_t role = 0u; role < 10u; ++role) {
+        if (reg[role] >= 15u || (used & (1u << reg[role])) != 0u)
+            return std::nullopt;
+        used = static_cast<std::uint16_t>(used | (1u << reg[role]));
+    }
+    const auto op = [&](const std::size_t i, const Kind kind,
+                        const std::optional<unsigned> destination = std::nullopt,
+                        const std::optional<unsigned> source = std::nullopt,
+                        const std::optional<std::int32_t> immediate = std::nullopt) {
+        return instruction(lines[i], kind,
+            destination ? std::optional{reg[*destination]} : std::nullopt,
+            source ? std::optional{reg[*source]} : std::nullopt, immediate);
+    };
+    const auto branch = [&](const std::size_t i, const Kind kind,
+                            const std::size_t target) {
+        return op(i, kind) &&
+            lines[i].target_address == entry_address + target * 2u;
+    };
+    // Four inlined bit reads. DT's branch decision precedes its SHLR delay
+    // slot; the following BT consumes SHLR's T (the low control bit).
+    const auto bit = [&](const std::size_t i) {
+        return op(i, Kind::DecrementAndTest, 7u) &&
+            branch(i + 1u, Kind::BfS, i + 6u) &&
+            op(i + 2u, Kind::ShiftLogicalRightOne, 6u) &&
+            op(i + 3u, Kind::MovByteLoadPostIncrement, 6u, 4u) &&
+            op(i + 4u, Kind::MovImmediate, 7u, std::nullopt, 8) &&
+            op(i + 5u, Kind::ShiftLogicalRightOne, 6u);
+    };
+    if (!op(0u, Kind::MovLongStorePreDecrement, 15u, 9u) ||
+        !op(1u, Kind::MovLongStorePreDecrement, 15u, 8u) ||
+        !op(2u, Kind::MovWordLoadPcRelative, 9u) ||
+        !op(3u, Kind::MovWordLoadPcRelative, 8u) ||
+        !op(4u, Kind::MovByteLoadPostIncrement, 6u, 4u) ||
+        !op(5u, Kind::MovImmediate, 7u, std::nullopt, 9) ||
+        !branch(6u, Kind::Bra, 13u) ||
+        !op(7u, Kind::MovRegister, 3u, 5u) ||
+        // Words 8/9 are an unreachable data island, not instructions.
+        !op(10u, Kind::MovByteLoadPostIncrement, 1u, 4u) ||
+        !op(11u, Kind::MovByteStore, 5u, 1u) ||
+        !op(12u, Kind::AddImmediate, 5u, std::nullopt, 1) ||
+        !bit(13u) || !branch(19u, Kind::Bt, 10u) ||
+        !bit(20u) || !branch(26u, Kind::Bt, 53u) ||
+        !op(27u, Kind::MovImmediate, 0u, std::nullopt, 0) ||
+        !bit(28u) || !op(34u, Kind::RotateLeftThroughT, 0u) ||
+        !bit(35u) || !op(41u, Kind::MovByteLoadPostIncrement, 2u, 4u) ||
+        !op(42u, Kind::RotateLeftThroughT, 0u) ||
+        !op(43u, Kind::OrRegister, 2u, 9u) ||
+        !op(44u, Kind::AddImmediate, 0u, std::nullopt, 2) ||
+        !op(45u, Kind::AddRegister, 2u, 5u) ||
+        // Forward byte copies deliberately permit overlapping backreferences.
+        !op(46u, Kind::MovByteLoadPostIncrement, 1u, 2u) ||
+        !op(47u, Kind::DecrementAndTest, 0u) ||
+        !op(48u, Kind::MovByteStore, 5u, 1u) ||
+        !branch(49u, Kind::BfS, 46u) ||
+        !op(50u, Kind::AddImmediate, 5u, std::nullopt, 1) ||
+        !branch(51u, Kind::Bra, 13u) || !op(52u, Kind::Nop) ||
+        !op(53u, Kind::MovByteLoadPostIncrement, 0u, 4u) ||
+        !op(54u, Kind::MovByteLoadPostIncrement, 1u, 4u) ||
+        !op(55u, Kind::ExtendUnsignedByte, 2u, 0u) ||
+        !op(56u, Kind::ShiftLogicalLeftEight, 1u) ||
+        !op(57u, Kind::OrRegister, 2u, 1u) ||
+        !op(58u, Kind::TestRegister, 2u, 2u) ||
+        !branch(59u, Kind::Bt, 71u) ||
+        !op(60u, Kind::ShiftLogicalRightTwo, 2u) ||
+        !op(61u, Kind::ShiftLogicalRightOne, 2u) ||
+        !op(62u, Kind::AndImmediate, 0u, std::nullopt, 7) ||
+        !op(63u, Kind::TestRegister, 0u, 0u) ||
+        !branch(64u, Kind::BfS, 44u) ||
+        !op(65u, Kind::OrRegister, 2u, 8u) ||
+        !op(66u, Kind::MovByteLoadPostIncrement, 0u, 4u) ||
+        !op(67u, Kind::AddRegister, 2u, 5u) ||
+        !op(68u, Kind::ExtendUnsignedByte, 0u, 0u) ||
+        !branch(69u, Kind::Bra, 46u) ||
+        !op(70u, Kind::AddImmediate, 0u, std::nullopt, 1) ||
+        !op(71u, Kind::MovLongLoadPostIncrement, 8u, 15u) ||
+        !op(72u, Kind::MovLongLoadPostIncrement, 9u, 15u) ||
+        !op(73u, Kind::MovRegister, 0u, 5u) ||
+        !op(74u, Kind::Rts) || !op(75u, Kind::SubRegister, 0u, 3u))
+        return std::nullopt;
+
+    NativePrsTransformContract result;
+    result.entry_address = entry_address;
+    result.covered_size = body_bytes;
+    const auto identity = code_identity(image, entry_address, body_bytes);
+    if (!identity) return std::nullopt;
+    result.code_identity = *identity;
+    result.source_register = static_cast<std::uint8_t>(reg[4u]);
+    result.destination_register = static_cast<std::uint8_t>(reg[5u]);
+    result.preserved_gpr_mask = static_cast<std::uint16_t>(
+        (~used & 0xffffu) | (1u << 15u) | (1u << reg[8u]) | (1u << reg[9u]));
+    for (const auto [i, expected] :
+         {std::pair{2u, 0xff00u}, std::pair{3u, 0xe000u}}) {
+        const auto expanded = static_cast<std::uint64_t>(lines[i].address) + 4u +
+            static_cast<std::uint32_t>(lines[i].instruction.displacement);
+        if (expanded > std::numeric_limits<std::uint32_t>::max() - 1u)
+            return std::nullopt;
+        const auto address = static_cast<std::uint32_t>(expanded);
+        const auto literal_resolved = image.resolve_segment_address(address, 2u);
+        if (!literal_resolved) return std::nullopt;
+        const auto* literal_segment = image.find_segment(*literal_resolved, 2u);
+        if (literal_segment == nullptr || !literal_segment->permissions.readable)
+            return std::nullopt;
+        const auto literal_offset = literal_segment->byte_offset(*literal_resolved);
+        const auto literal_identity = code_identity(image, address, 2u);
+        if (!literal_offset || *literal_offset > literal_segment->bytes.size() ||
+            literal_segment->bytes.size() - *literal_offset < 2u || !literal_identity)
+            return std::nullopt;
+        const auto value = katana::io::read_u16_le(literal_segment->bytes, *literal_offset);
+        if (value != expected) return std::nullopt;
+        result.literals.push_back({lines[i].address, address, value, *literal_identity});
+    }
+    return result;
+}
+
+std::vector<NativeStagedTransformCandidate>
+discover_native_staged_transform_candidates(
+    const katana::io::ExecutableImage& image,
+    const std::span<const Line> analyzed_lines) {
+    std::vector<NativeStagedTransformCandidate> result;
+    for (std::size_t i = 0u; i + 24u <= analyzed_lines.size(); ++i) {
+        if (analyzed_lines[i].opcode != 0x2fe6u) continue;
+        if (auto candidate = staged_transform_candidate(
+                image, analyzed_lines.subspan(i, 24u))) {
+            result.push_back(std::move(*candidate));
+            if (result.size() > maximum_provider_candidates)
+                throw std::runtime_error("Staged transform candidate budget exceeded.");
+        }
+    }
+    std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+        return a.entry_address < b.entry_address;
+    });
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
+std::vector<NativeStagedTransformCandidate>
+discover_native_staged_transform_candidates(
+    const katana::io::ExecutableImage& image) {
+    std::vector<NativeStagedTransformCandidate> result;
+    for (const auto& segment : image.segments()) {
+        if (!segment.permissions.executable) continue;
+        for (std::size_t offset = 0u; offset + 48u <= segment.bytes.size(); offset += 2u) {
+            if (katana::io::read_u16_le(segment.bytes, offset) != 0x2fe6u)
+                continue;
+            const auto expanded = static_cast<std::uint64_t>(segment.virtual_address) + offset;
+            if (expanded > std::numeric_limits<std::uint32_t>::max() - 48u)
+                continue;
+            const auto lines = katana::sh4::disassemble(
+                std::span<const std::uint8_t>(segment.bytes).subspan(offset, 48u),
+                static_cast<std::uint32_t>(expanded));
+            if (auto candidate = staged_transform_candidate(image, lines)) {
+                result.push_back(std::move(*candidate));
+                if (result.size() > maximum_provider_candidates)
+                    throw std::runtime_error("Staged transform candidate budget exceeded.");
+            }
+        }
+    }
+    std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+        return a.entry_address < b.entry_address;
+    });
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
+std::vector<NativeConditionalFilePlacement>
+discover_native_conditional_file_placements(
+    const katana::io::ExecutableImage& image,
+    const ControlFlowAnalysisResult& analysis) {
+    std::vector<NativeConditionalFilePlacement> result;
+    // Decode only the existing inventory, from current source bytes. The
+    // supplied CFG remains positive candidate evidence, never completeness.
+    std::vector<Line> lines;
+    lines.reserve(analysis.recursive.instructions.size());
+    for (const auto& supplied : analysis.recursive.instructions) {
+        const auto resolved = image.resolve_segment_address(supplied.address, 2u);
+        if (!resolved) return {};
+        const auto* segment = image.find_segment(*resolved, 2u);
+        if (!segment || !segment->permissions.executable) return {};
+        const auto offset = segment->byte_offset(*resolved);
+        if (!offset || *offset > segment->bytes.size() ||
+            segment->bytes.size() - *offset < 2u) return {};
+        const auto opcode = katana::io::read_u16_le(segment->bytes, *offset);
+        if (opcode != supplied.opcode ||
+            (!lines.empty() && supplied.address <= lines.back().address)) return {};
+        Line line;
+        line.address = supplied.address;
+        line.opcode = opcode;
+        line.instruction = katana::sh4::decode(opcode);
+        line.target_address = katana::sh4::calculate_direct_branch_target(line.instruction, line.address);
+        line.is_delay_slot = !lines.empty() && lines.back().address + 2u == line.address &&
+                             lines.back().instruction.has_delay_slot && !lines.back().is_delay_slot;
+        lines.push_back(std::move(line));
+    }
+    std::map<std::uint32_t, NativeStagedTransformCandidate> wrappers;
+    std::vector<std::uint32_t> callees;
+    for (auto& wrapper : discover_native_staged_transform_candidates(image, lines)) {
+        const auto prs = recognize_native_prs_transform(image, wrapper.transform_target_address);
+        if (!prs || prs->source_register != 4u || prs->destination_register != 5u ||
+            (prs->preserved_gpr_mask & 0xc000u) != 0xc000u) continue;
+        callees.push_back(wrapper.entry_address);
+        wrappers.emplace(wrapper.entry_address, std::move(wrapper));
+    }
+    if (callees.empty()) return result;
+    std::vector<FunctionBoundary> boundaries;
+    std::vector<std::uint32_t> leaders;
+    std::vector<std::uint32_t> normal_entries;
+    for (const auto& function : analysis.recursive.functions) {
+        boundaries.push_back({function.address, function.size});
+        leaders.push_back(function.address);
+        normal_entries.push_back(function.address);
+        if (function.size != 0u && function.address <=
+            std::numeric_limits<std::uint32_t>::max() - function.size)
+            leaders.push_back(function.address + function.size);
+    }
+    // Snapshot switch entries are intentionally absent from executable CFG
+    // edges. Re-derive their table bytes and producer shape for this private,
+    // conditional flow graph only; do not mutate the analyzed program or
+    // claim that these are all possible selector values/targets.
+    const auto source_address = [&](const std::uint32_t address) {
+        return image.resolve_segment_address(address, 2u).value_or(address);
+    };
+    std::set<std::uint32_t> ingress_boundaries;
+    std::set<std::pair<std::uint32_t, std::uint32_t>> ingress_edges;
+    const auto boundary = [&](const std::uint32_t address) {
+        ingress_boundaries.insert(source_address(address));
+    };
+    const auto ingress = [&](const std::uint32_t from, const std::uint32_t to) {
+        ingress_edges.emplace(source_address(from), source_address(to));
+    };
+    for (const auto entry : image.entry_points()) boundary(entry);
+    for (const auto& function : analysis.recursive.functions) boundary(function.address);
+    for (const auto& seed : analysis.recursive.seed_contract) boundary(seed.address);
+    for (const auto& entry : analysis.guarded_aot_entries) {
+        boundary(entry.guest_address); boundary(entry.shared_body_address);
+    }
+    for (const auto& line : lines)
+        if (line.target_address) ingress(line.address, *line.target_address);
+    for (const auto& edge : analysis.resolved_edges)
+        ingress(edge.instruction_address, edge.target_address);
+    for (const auto& indirect : analysis.indirect_control_flow) {
+        if (indirect.target) ingress(indirect.instruction_address, *indirect.target);
+        for (const auto target : indirect.targets) ingress(indirect.instruction_address, target);
+        for (const auto target : indirect.analysis_candidates) ingress(indirect.instruction_address, target);
+    }
+    for (const auto& continuation : analysis.static_return_continuations)
+        ingress(continuation.instruction_address, continuation.target_address);
+    for (const auto& table : analysis.jump_tables)
+        for (const auto& entry : table.entries)
+            if (entry.accepted) ingress(table.dispatch_address, entry.target);
+    std::vector<detail::RelativeJumpTableRecognition> tables;
+    for (std::size_t i = 0u; i < lines.size(); ++i) {
+        if ((lines[i].instruction.kind != Kind::Braf &&
+             lines[i].instruction.kind != Kind::Bsrf) || lines[i].is_delay_slot) continue;
+        auto table = detail::recognize_relative_jump_table(image, lines, i);
+        if (!table) continue;
+        // Even rejected tables can contradict another producer's ingress.
+        // Collect every candidate before validating any positive table path.
+        for (const auto& entry : table->table.entries)
+            if (entry.accepted) ingress(table->table.dispatch_address, entry.target);
+        tables.push_back(std::move(*table));
+    }
+    detail::GlobalEntryPredecessorIndex predecessors;
+    for (const auto address : ingress_boundaries) predecessors.add_boundary(address);
+    for (const auto& [from, to] : ingress_edges) predecessors.add_edge(from, to);
+    auto conditional_edges = analysis.resolved_edges;
+    for (const auto& recognition : tables) {
+        const auto& table = recognition.table;
+        const auto& producer = recognition.producer;
+        if (table.dispatch_kind != JumpTableDispatchKind::Jump ||
+            (!table.resolved && !table.aot_candidates_only)) continue;
+        std::vector<detail::GlobalEntryEdge> internal_edges;
+        for (const auto& edge : producer.internal_branch_edges)
+            internal_edges.push_back({source_address(edge.source), source_address(edge.target)});
+        if (producer.requires_global_ingress_proof &&
+            !predecessors.closes(source_address(producer.ingress_seed_address),
+                source_address(producer.ingress_load_address), std::span{internal_edges})) continue;
+        for (const auto& entry : table.entries)
+            if (entry.accepted)
+                conditional_edges.push_back({table.dispatch_address, entry.target,
+                    ResolvedControlFlowKind::Jump, true, ControlFlowEvidence::GuardedPartial});
+    }
+    const auto blocks = build_basic_blocks(lines, conditional_edges, leaders, normal_entries);
+    const auto functions = discover_functions_from_blocks(blocks, boundaries, conditional_edges);
+    const auto calls = detail::discover_source_constant_calls(image, blocks, functions, callees);
+    for (const auto& call : calls) {
+        if (!call.arguments[0] || !call.arguments[1]) continue;
+        const auto wrapper = wrappers.find(call.callee_address);
+        if (wrapper == wrappers.end()) continue;
+        std::string name;
+        bool terminated = false;
+        for (std::uint64_t i = 0u; i <= 255u; ++i) {
+            const auto address = static_cast<std::uint64_t>(*call.arguments[0]) + i;
+            if (address > std::numeric_limits<std::uint32_t>::max()) break;
+            const auto resolved = image.resolve_segment_address(static_cast<std::uint32_t>(address), 1u);
+            if (!resolved) break;
+            const auto* segment = image.find_segment(*resolved, 1u);
+            if (!segment || !segment->permissions.readable) break;
+            const auto offset = segment->byte_offset(*resolved);
+            if (!offset || *offset >= segment->bytes.size()) break;
+            const auto c = segment->bytes[*offset];
+            if (c == 0u) { terminated = true; break; }
+            if (c < 0x20u || c > 0x7eu || c == ':' || c == '*' || c == '?') break;
+            name.push_back(static_cast<char>(c));
+        }
+        if (!terminated || name.empty() || name.front() == '/' || name.front() == '\\' ||
+            name.find("..") != std::string::npos) continue;
+        result.push_back({call.function_address, call.call_instruction_address, call.callee_address,
+            std::move(name), *call.arguments[1], wrapper->second.staging_buffer_address, {}});
+    }
+    if (result.empty()) return result;
+    // Hash once per source view, not once per call or disc candidate. Whole
+    // segment bytes also bind out-of-body literal pools and filename NULs.
+    katana::io::Sha256Accumulator binding;
+    const auto scalar = [&](std::uint64_t value) {
+        std::array<char, 8> bytes{};
+        for (auto& byte : bytes) { byte = static_cast<char>(value & 255u); value >>= 8u; }
+        binding.update(std::string_view(bytes.data(), bytes.size()));
+    };
+    const auto string = [&](std::string_view value) { scalar(value.size()); binding.update(value); };
+    string("conditional-prs-calls-v1:source-CFG:SH-C-callee-save:wrapper-spill-preserved:effects-unproved");
+    scalar(static_cast<std::uint64_t>(image.address_model()));
+    scalar(static_cast<std::uint64_t>(image.guest_call_abi()));
+    scalar(static_cast<std::uint64_t>(image.initial_snapshot_policy()));
+    scalar(image.segments().size());
+    for (const auto& segment : image.segments()) {
+        scalar(segment.virtual_address); scalar(segment.memory_size);
+        scalar(static_cast<std::uint64_t>(segment.source_kind));
+        scalar(static_cast<std::uint64_t>(segment.load_phase));
+        scalar(segment.permissions.readable); scalar(segment.permissions.writable);
+        scalar(segment.permissions.executable); string(segment.local_source_name);
+        string(std::string_view(reinterpret_cast<const char*>(segment.bytes.data()), segment.bytes.size()));
+    }
+    scalar(image.address_aliases().size());
+    for (const auto& alias : image.address_aliases()) {
+        scalar(alias.source_start); scalar(alias.runtime_start); scalar(alias.size);
+    }
+    scalar(lines.size());
+    for (const auto& line : lines) { scalar(line.address); scalar(line.opcode); scalar(line.is_delay_slot); }
+    scalar(boundaries.size());
+    for (const auto& boundary : boundaries) { scalar(boundary.entry_address); scalar(boundary.size); }
+    scalar(conditional_edges.size());
+    for (const auto& edge : conditional_edges) {
+        scalar(edge.instruction_address); scalar(edge.target_address);
+        scalar(static_cast<std::uint64_t>(edge.kind)); scalar(edge.guarded);
+        scalar(static_cast<std::uint64_t>(edge.evidence)); scalar(edge.analysis_candidate_carrier);
+    }
+    scalar(ingress_boundaries.size());
+    for (const auto address : ingress_boundaries) scalar(address);
+    scalar(ingress_edges.size());
+    for (const auto& [from, to] : ingress_edges) { scalar(from); scalar(to); }
+    const auto source_identity = binding.finish();
+    for (auto& candidate : result) {
+        const auto derivation = source_identity + ":" + std::to_string(candidate.function_address) + ":" +
+            std::to_string(candidate.call_instruction_address) + ":" + std::to_string(candidate.wrapper_address) +
+            ":" + candidate.file_name + ":" + std::to_string(candidate.possible_destination_address) +
+            ":" + std::to_string(candidate.staging_buffer_address);
+        candidate.source_contract_identity = "sha256:" + katana::io::sha256_bytes(derivation);
+    }
+    return result;
+}
 
 std::string_view native_sdk_provider_family_name(
     const NativeSdkProviderFamily family) noexcept {

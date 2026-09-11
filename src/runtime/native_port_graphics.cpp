@@ -2,6 +2,7 @@
 #include "katana/runtime/native_port_platform.hpp"
 #include "katana/runtime/native_port_telemetry.hpp"
 #include "native_port_graphics_command_stream.hpp"
+#include "native_port_ui_texture_edges.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -1931,6 +1932,8 @@ class NativePortGraphicsBackend final {
             type2_draw_sequence = type2_list_draw_sequence_++;
         }
 
+        // Lives through preprocessing and GPU upload; never aliases prepared_vertices_.
+        std::array<NativePortVertex, 4u> ui_texture_edge_vertices;
         auto vertices = packet.vertices;
         auto indices = packet.indices;
         auto topology = packet.topology;
@@ -1953,6 +1956,10 @@ class NativePortGraphicsBackend final {
                 "draw-index",
                 "draw-vertex",
                 "draw-topology");
+            if (texture_slot != nullptr && detail::prepare_ui_texture_edges(
+                    packet, texture_slot->config.extent,
+                    cached_layout_.ui_viewport.height, ui_texture_edge_vertices))
+                vertices = ui_texture_edge_vertices;
             const bool preprocessing_required =
                 packet.rasterizer.shading ==
                     NativePortShadingMode::FlatLastVertex ||

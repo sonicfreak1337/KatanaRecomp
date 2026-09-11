@@ -70,6 +70,12 @@ bool analyzer_fixpoint_trace_enabled() noexcept {
             std::strcmp(value, "verbose") == 0);
 }
 
+bool analyzer_join_diagnostics_enabled() noexcept {
+    const auto* const value =
+        std::getenv("CODEX_ANALYZER_STACK_DIAGNOSTICS");
+    return value != nullptr && std::strcmp(value, "joins") == 0;
+}
+
 void emit_analyzer_fixpoint_trace(const char* const phase,
                                   const std::size_t iteration,
                                   const std::uint32_t function,
@@ -399,6 +405,40 @@ constexpr std::size_t maximum_memory_values = 256u;
 constexpr std::size_t maximum_current_epoch_base_offsets =
     maximum_inventory_stack_coordinates;
 constexpr std::size_t maximum_parallel_resolution_jobs = 64u;
+
+// Root evaluations already occupy a pool lane and can have a large frame.
+// Queueing a synchronous child batch would make their waiter execute unrelated
+// queued roots recursively. Keep zero-lease child work on the current lane;
+// top-level batches and work needing its own lease still use the executor.
+template <typename Work>
+void parallel_function_value_for(
+    ParallelWorkExecutor& executor, AnalysisWorkDescriptor descriptor,
+    const std::size_t item_count, const std::size_t maximum_local_jobs,
+    ParallelWorkActivity* const activity, Work&& work) {
+    if (item_count == 0u) return;
+    const bool valid_descriptor = maximum_local_jobs != 0u &&
+        descriptor.estimated_cost != 0u && descriptor.quantum != 0u &&
+        descriptor.quantum <= maximum_analysis_work_quantum &&
+        static_cast<std::size_t>(descriptor.priority) <=
+            static_cast<std::size_t>(AnalysisWorkPriorityKind::Throughput);
+    if (!executor.current_thread_is_worker() ||
+        descriptor.transient_bytes != 0u || !valid_descriptor) {
+        parallel_analysis_for(executor, std::move(descriptor), item_count,
+                              maximum_local_jobs, activity,
+                              std::forward<Work>(work));
+        return;
+    }
+    const detail::ParallelWorkActivityScope activity_scope{activity};
+    std::exception_ptr first_error;
+    for (std::size_t index = 0u; index < item_count; ++index) {
+        try {
+            std::invoke(work, index);
+        } catch (...) {
+            if (!first_error) first_error = std::current_exception();
+        }
+    }
+    if (first_error) std::rethrow_exception(first_error);
+}
 constexpr std::size_t minimum_parallel_resolution_functions = 2u;
 constexpr std::size_t maximum_abi_stack_read_top_chain = 16u;
 constexpr std::size_t maximum_evaluation_inventory_replay_bytes =
@@ -957,6 +997,161 @@ struct AbstractState {
 
     bool operator==(const AbstractState&) const = default;
 };
+
+void emit_analyzer_join_delta(
+    const AbstractState& before,
+    const AbstractState& after,
+    const std::uint32_t function,
+    const std::uint32_t source,
+    const std::uint32_t target,
+    const std::size_t iteration,
+    const bool reported) {
+    const bool actual = before != after;
+    emit_bounded_analyzer_diagnostic(
+        16u, function, source, target,
+        static_cast<std::uint8_t>(reported != actual), [&] {
+            std::uint32_t registers = 0u;
+            std::uint32_t coordinates = 0u;
+            for (std::size_t reg = 0u; reg < before.size(); ++reg) {
+                if (before[reg] != after[reg]) registers |= 1u << reg;
+                if (before.stack_offsets[reg] != after.stack_offsets[reg] ||
+                    before.inventory_stack_offsets[reg] !=
+                        after.inventory_stack_offsets[reg] ||
+                    before.inventory_stack_offset_candidates[reg] !=
+                        after.inventory_stack_offset_candidates[reg] ||
+                    before.stack_may_alias[reg] != after.stack_may_alias[reg] ||
+                    before.inventory_stack_may_alias[reg] !=
+                        after.inventory_stack_may_alias[reg] ||
+                    before.inventory_vbr_relative[reg] !=
+                        after.inventory_vbr_relative[reg] ||
+                    before.inventory_fixed_storage_reference[reg] !=
+                        after.inventory_fixed_storage_reference[reg])
+                    coordinates |= 1u << reg;
+            }
+            std::fprintf(stderr,
+                "KATANA_ANALYZER_JOIN_DELTA function=0x%08X source=0x%08X "
+                "target=0x%08X iteration=%zu reported=%u actual=%u "
+                "registers=0x%04X coordinates=0x%04X stack=%u stack_before=%zu "
+                "stack_after=%zu tail=%u memory=%u stack_carrier=%u "
+                "memory_carrier=%u stack_epoch=%u memory_epoch=%u "
+                "write_ranges=%u definite_writes=%u\n",
+                function, source, target, iteration,
+                static_cast<unsigned>(reported), static_cast<unsigned>(actual),
+                registers, coordinates,
+                static_cast<unsigned>(before.stack_values != after.stack_values),
+                before.stack_values.size(), after.stack_values.size(),
+                static_cast<unsigned>(before.stack_tail != after.stack_tail),
+                static_cast<unsigned>(before.memory_values != after.memory_values),
+                static_cast<unsigned>(before.inventory_unresolved_stack_carrier !=
+                    after.inventory_unresolved_stack_carrier),
+                static_cast<unsigned>(before.inventory_unresolved_memory_carrier !=
+                    after.inventory_unresolved_memory_carrier),
+                static_cast<unsigned>(before.inventory_unresolved_stack_epoch !=
+                    after.inventory_unresolved_stack_epoch),
+                static_cast<unsigned>(before.inventory_unresolved_memory_epoch !=
+                    after.inventory_unresolved_memory_epoch),
+                static_cast<unsigned>(before.memory_write_unknown !=
+                    after.memory_write_unknown || before.memory_write_ranges !=
+                    after.memory_write_ranges),
+                static_cast<unsigned>(before.memory_definitely_written_ranges !=
+                    after.memory_definitely_written_ranges));
+            const auto print_value = [](const char* domain, const std::uint32_t key,
+                                         const AbstractValue& old_value,
+                                         const AbstractValue& new_value) {
+                const auto flags = [](const AbstractValue& v) {
+                    return static_cast<unsigned>(v.known) |
+                        (static_cast<unsigned>(v.guarded) << 1u) |
+                        (static_cast<unsigned>(v.complete) << 2u) |
+                        (static_cast<unsigned>(v.inventory_stack_derived) << 3u) |
+                        (static_cast<unsigned>(v.inventory_code_pointer) << 4u) |
+                        (static_cast<unsigned>(v.inventory_pc_relative_code_literal) << 5u) |
+                        (static_cast<unsigned>(v.inventory_code_pointer_values_truncated) << 6u) |
+                        (static_cast<unsigned>(v.inventory_pc_relative_code_literal_values_truncated) << 7u) |
+                        (static_cast<unsigned>(v.pending_abi_scalar_values_truncated) << 8u) |
+                        (static_cast<unsigned>(v.contextual_candidate_dependency) << 9u) |
+                        (static_cast<unsigned>(v.inventory_stack_callback_loss_unresolved) << 10u) |
+                        (static_cast<unsigned>(v.inventory_saved_stack_epoch.present) << 11u);
+                };
+                std::fprintf(stderr,
+                    "KATANA_ANALYZER_JOIN_VALUE domain=%s key=0x%08X "
+                    "flags=%X:%X values=%zu:%zu first=0x%08X:0x%08X "
+                    "last=0x%08X:0x%08X code=%zu:%zu literal=%zu:%zu "
+                    "pending=%zu:%zu calls=%zu:%zu callees=%zu:%zu epoch=%u\n",
+                    domain, key, flags(old_value), flags(new_value),
+                    old_value.values.size(), new_value.values.size(),
+                    old_value.values.empty() ? 0u : old_value.values.front(),
+                    new_value.values.empty() ? 0u : new_value.values.front(),
+                    old_value.values.empty() ? 0u : old_value.values.back(),
+                    new_value.values.empty() ? 0u : new_value.values.back(),
+                    old_value.inventory_code_pointer_values.size(),
+                    new_value.inventory_code_pointer_values.size(),
+                    old_value.inventory_pc_relative_code_literal_values.size(),
+                    new_value.inventory_pc_relative_code_literal_values.size(),
+                    old_value.pending_abi_scalar_values.size(),
+                    new_value.pending_abi_scalar_values.size(),
+                    old_value.call_sites.size(), new_value.call_sites.size(),
+                    old_value.callees.size(), new_value.callees.size(),
+                    static_cast<unsigned>(old_value.inventory_saved_stack_epoch !=
+                        new_value.inventory_saved_stack_epoch));
+            };
+            for (std::size_t reg = 0u; reg < before.size(); ++reg)
+                if ((registers & (1u << reg)) != 0u)
+                    print_value("register", static_cast<std::uint32_t>(reg),
+                                before[reg], after[reg]);
+            const auto print_first_cell = [&](const char* domain,
+                                               const auto& old_cells,
+                                               const auto& new_cells) {
+                const AbstractValue absent;
+                for (const auto& [key, value] : old_cells) {
+                    const auto found = new_cells.find(key);
+                    if (found != new_cells.end() && value == found->second) continue;
+                    print_value(domain, static_cast<std::uint32_t>(key), value,
+                                found == new_cells.end() ? absent : found->second);
+                    return;
+                }
+                for (const auto& [key, value] : new_cells)
+                    if (!old_cells.contains(key)) {
+                        print_value(domain, static_cast<std::uint32_t>(key), absent, value);
+                        return;
+                    }
+            };
+            print_first_cell("stack", before.stack_values, after.stack_values);
+            print_first_cell("memory", before.memory_values, after.memory_values);
+            const auto print_carrier = [](const char* domain,
+                                            const InventoryCandidateCarrier& old_carrier,
+                                            const InventoryCandidateCarrier& new_carrier) {
+                if (old_carrier == new_carrier) return;
+                const auto flags = [](const InventoryCandidateCarrier& value) {
+                    return static_cast<unsigned>(value.inventory_code_pointer_values_truncated) |
+                        (static_cast<unsigned>(value.inventory_pc_relative_code_literal_values_truncated) << 1u) |
+                        (static_cast<unsigned>(value.pending_abi_scalar_values_truncated) << 2u) |
+                        (static_cast<unsigned>(value.contextual_candidate_dependency) << 3u);
+                };
+                std::fprintf(stderr,
+                    "KATANA_ANALYZER_JOIN_CARRIER domain=%s flags=%X:%X "
+                    "code=%zu:%zu literal=%zu:%zu pending=%zu:%zu "
+                    "pending_first=0x%08X:0x%08X pending_last=0x%08X:0x%08X "
+                    "calls=%zu:%zu callees=%zu:%zu\n",
+                    domain, flags(old_carrier), flags(new_carrier),
+                    old_carrier.inventory_code_pointer_values.size(),
+                    new_carrier.inventory_code_pointer_values.size(),
+                    old_carrier.inventory_pc_relative_code_literal_values.size(),
+                    new_carrier.inventory_pc_relative_code_literal_values.size(),
+                    old_carrier.pending_abi_scalar_values.size(),
+                    new_carrier.pending_abi_scalar_values.size(),
+                    old_carrier.pending_abi_scalar_values.empty() ? 0u : old_carrier.pending_abi_scalar_values.front(),
+                    new_carrier.pending_abi_scalar_values.empty() ? 0u : new_carrier.pending_abi_scalar_values.front(),
+                    old_carrier.pending_abi_scalar_values.empty() ? 0u : old_carrier.pending_abi_scalar_values.back(),
+                    new_carrier.pending_abi_scalar_values.empty() ? 0u : new_carrier.pending_abi_scalar_values.back(),
+                    old_carrier.call_sites.size(), new_carrier.call_sites.size(),
+                    old_carrier.callees.size(), new_carrier.callees.size());
+            };
+            print_carrier("stack", before.inventory_unresolved_stack_carrier,
+                          after.inventory_unresolved_stack_carrier);
+            print_carrier("memory", before.inventory_unresolved_memory_carrier,
+                          after.inventory_unresolved_memory_carrier);
+        });
+}
 
 [[nodiscard]] bool valid_memory_write_range(
     const FunctionMemoryWriteRange& range) noexcept {
@@ -2338,9 +2533,14 @@ void materialize_unresolved_saved_stack_alias(
 [[nodiscard]] bool has_non_epoch_abstract_fact(
     const AbstractValue& value);
 void collapse_payload_free_stack_aliases(AbstractState& state);
+enum class InventoryCarrierProjection : std::uint8_t {
+    AllLanes,
+    CandidateLanes,
+};
 bool merge_inventory_candidate_carrier(
     InventoryCandidateCarrier& destination,
-    const InventoryCandidateCarrier& source);
+    const InventoryCandidateCarrier& source,
+    InventoryCarrierProjection projection = InventoryCarrierProjection::AllLanes);
 [[nodiscard]] bool direct_inventory_candidate_carrier_truncated(
     const InventoryCandidateCarrier& carrier);
 bool merge_inventory_saved_stack_epoch(
@@ -3554,10 +3754,12 @@ void normalize_inventory_saved_stack_epoch_summary(
 
 bool merge_inventory_candidate_carrier(
     InventoryCandidateCarrier& destination,
-    const InventoryCandidateCarrier& source) {
+    const InventoryCandidateCarrier& source,
+    const InventoryCarrierProjection projection) {
+    const bool include_pending = projection == InventoryCarrierProjection::AllLanes;
     const bool source_has_payload =
         has_inventory_candidate_carrier_payload(source) ||
-        has_pending_abi_scalar_payload(source);
+        (include_pending && has_pending_abi_scalar_payload(source));
     bool changed = merge_inventory_candidate_values(
         destination.inventory_code_pointer_values,
         destination.inventory_code_pointer_values_truncated,
@@ -3569,12 +3771,13 @@ bool merge_inventory_candidate_carrier(
         source.inventory_pc_relative_code_literal_values,
         source.inventory_pc_relative_code_literal_values_truncated) ||
               changed;
-    changed = merge_inventory_candidate_values(
-        destination.pending_abi_scalar_values,
-        destination.pending_abi_scalar_values_truncated,
-        source.pending_abi_scalar_values,
-        source.pending_abi_scalar_values_truncated) ||
-              changed;
+    if (include_pending)
+        changed = merge_inventory_candidate_values(
+            destination.pending_abi_scalar_values,
+            destination.pending_abi_scalar_values_truncated,
+            source.pending_abi_scalar_values,
+            source.pending_abi_scalar_values_truncated) ||
+                  changed;
     if (source.contextual_candidate_dependency &&
         !destination.contextual_candidate_dependency) {
         destination.contextual_candidate_dependency = true;
@@ -3644,7 +3847,7 @@ bool absorb_pending_abi_scalar(
             carrier.pending_abi_scalar_values,
             carrier.pending_abi_scalar_values_truncated,
             value.values,
-            false);
+            false) || changed;
     }
     // Pending scalars are a bounded semantic MAY payload.  Their provenance
     // must survive even when every scalar was already present in the carrier.
@@ -6780,26 +6983,29 @@ void make_unknown_preserving_code_inventory(AbstractValue& value) {
 // SavedEpochs can retain finite callback candidates below an unresolved
 // stack/memory domain.  A domain MAY load may expose those candidates, but it
 // must not expose the epoch (or its loss) as value-scoped restore provenance.
-// Pending ABI scalars intentionally remain in the carrier and are ignored by
-// the value overlay until a separate ABI proof gates their promotion.
+// Pending scalars belong to the saved stack's slots, not to the value of the
+// pointer which carries that epoch. Only an actual epoch-address dereference
+// may project them onto a load result. Flat domain overlays retain their
+// direct Pending lane separately and request only the epoch's Candidate lanes.
 void absorb_inventory_saved_stack_epoch_candidate_carrier(
     InventoryCandidateCarrier& destination,
-    const InventorySavedStackEpoch& epoch) {
+    const InventorySavedStackEpoch& epoch,
+    const InventoryCarrierProjection projection) {
     static_cast<void>(merge_inventory_candidate_carrier(
-        destination, epoch.unresolved_candidate_carrier));
+        destination, epoch.unresolved_candidate_carrier, projection));
     for (const auto& slot : epoch.slots) {
         static_cast<void>(merge_inventory_candidate_carrier(
-            destination, slot.carrier));
+            destination, slot.carrier, projection));
         for (const auto& nested : slot.nested_epochs)
             absorb_inventory_saved_stack_epoch_candidate_carrier(
-                destination, nested);
+                destination, nested, projection);
     }
     for (const auto& nested : epoch.unresolved_nested_epochs)
         absorb_inventory_saved_stack_epoch_candidate_carrier(
-            destination, nested);
+            destination, nested, projection);
     for (const auto& channel : epoch.origin_channels)
         absorb_inventory_saved_stack_epoch_candidate_carrier(
-            destination, channel);
+            destination, channel, projection);
 }
 
 // Address-scoped summary carriers preserve the ordinary known/value/complete
@@ -6876,9 +7082,9 @@ void materialize_inventory_saved_stack_epoch_candidate_payload(
     AbstractValue& value,
     const InventorySavedStackEpoch& epoch) {
     InventoryCandidateCarrier carrier;
-    absorb_inventory_saved_stack_epoch_candidate_carrier(carrier, epoch);
+    absorb_inventory_saved_stack_epoch_candidate_carrier(
+        carrier, epoch, InventoryCarrierProjection::CandidateLanes);
     overlay_inventory_domain_candidate_carrier(value, carrier);
-    overlay_value_pending_carrier(value, carrier);
 }
 
 void absorb_unresolved_stack_storage(AbstractState& state,
@@ -7098,13 +7304,14 @@ void normalize_stack_tail_payload(AbstractValue& payload) {
     payload.complete = false;
 }
 
-void fold_stack_value_into_tail(AbstractState& state,
+bool fold_stack_value_into_tail(AbstractState& state,
                                 const std::int32_t key,
                                 const AbstractValue& source,
                                 const StackTailFoldPendingScalarPolicy
                                     pending_scalar_policy =
                                         StackTailFoldPendingScalarPolicy::
                                             PreserveBeforeAbiBoundary) {
+    bool changed = false;
     auto folded = source;
     // Before a proven ABI boundary, folding removes the exact stack slot that
     // would otherwise validate an ordinary finite scalar.  Preserve that
@@ -7112,13 +7319,13 @@ void fold_stack_value_into_tail(AbstractState& state,
     // intentionally omit it because promotion has already happened.
     if (pending_scalar_policy ==
         StackTailFoldPendingScalarPolicy::PreserveBeforeAbiBoundary)
-        static_cast<void>(absorb_pending_abi_scalar(
-            state.inventory_unresolved_stack_carrier, folded));
+        changed = absorb_pending_abi_scalar(
+            state.inventory_unresolved_stack_carrier, folded);
     if (has_latent_saved_stack_alias(folded)) {
-        static_cast<void>(add_unresolved_saved_stack_alias(
+        changed = add_unresolved_saved_stack_alias(
             state,
             unresolved_saved_stack_alias_source_stack,
-            folded.inventory_saved_stack_epoch));
+            folded.inventory_saved_stack_epoch) || changed;
         folded.inventory_saved_stack_epoch = {};
     } else if (has_saved_stack_epoch(folded)) {
         // A tail has no stable identity for a suspended stack snapshot. Keep
@@ -7132,21 +7339,30 @@ void fold_stack_value_into_tail(AbstractState& state,
         state.stack_tail.present = true;
         state.stack_tail.lower_bound = key;
         state.stack_tail.payload = std::move(folded);
-        return;
+        return true;
     }
-    state.stack_tail.lower_bound = std::min(
-        state.stack_tail.lower_bound, key);
+    if (key < state.stack_tail.lower_bound) {
+        state.stack_tail.lower_bound = key;
+        changed = true;
+    }
+    const auto before = state.stack_tail.payload;
     static_cast<void>(merge_value(state.stack_tail.payload, folded));
     normalize_stack_tail_payload(state.stack_tail.payload);
+    // Joining a concrete slot can change an intermediate value that tail
+    // normalization removes again. Only the published state schedules work.
+    return state.stack_tail.payload != before || changed;
 }
 
-void normalize_stack_tail_summary(
+bool normalize_stack_tail_summary(
     AbstractState& state,
     const bool allow_first_tail_smash = true,
     const StackTailFoldPendingScalarPolicy pending_scalar_policy =
         StackTailFoldPendingScalarPolicy::PreserveBeforeAbiBoundary) {
+    bool changed = false;
     if (state.stack_tail.present) {
+        const auto before = state.stack_tail.payload;
         normalize_stack_tail_payload(state.stack_tail.payload);
+        changed = state.stack_tail.payload != before;
         for (auto value = state.stack_values.lower_bound(
                  state.stack_tail.lower_bound);
              value != state.stack_values.end();) {
@@ -7155,13 +7371,14 @@ void normalize_stack_tail_summary(
             value = state.stack_values.erase(value);
             fold_stack_value_into_tail(
                 state, key, payload, pending_scalar_policy);
+            changed = true;
         }
     }
     if (state.stack_values.size() <=
         maximum_abi_persistent_flow_stack_slots)
-        return;
+        return changed;
     if (!state.stack_tail.present && !allow_first_tail_smash)
-        return;
+        return changed;
     auto first_tail = state.stack_values.begin();
     std::advance(
         first_tail,
@@ -7173,20 +7390,22 @@ void normalize_stack_tail_summary(
         first_tail = state.stack_values.erase(first_tail);
         fold_stack_value_into_tail(
             state, key, payload, pending_scalar_policy);
+        changed = true;
     }
+    return changed;
 }
 
-void merge_stack_tail_summary(AbstractState& destination,
+bool merge_stack_tail_summary(AbstractState& destination,
                               const StackTailSummary& source,
                               const StackTailFoldPendingScalarPolicy
                                   pending_scalar_policy =
                                       StackTailFoldPendingScalarPolicy::
                                           PreserveBeforeAbiBoundary) {
-    if (!source.present) return;
+    if (!source.present) return false;
     // Treat the incoming summary exactly like a folded cell at its lower
     // bound.  Besides keeping the monotone bound this applies the saved-epoch
     // fail-closed rule to an already summarized source tail as well.
-    fold_stack_value_into_tail(
+    return fold_stack_value_into_tail(
         destination, source.lower_bound, source.payload, pending_scalar_policy);
 }
 
@@ -7598,9 +7817,9 @@ bool merge_state(AbstractState& destination,
         for (const auto& [offset, value] : source.stack_values) {
             if (destination.stack_values.contains(offset)) continue;
             if (stack_tail_value_at(destination, offset) != nullptr) {
-                fold_stack_value_into_tail(
-                    destination, offset, value, pending_scalar_policy);
-                changed = true;
+                changed = fold_stack_value_into_tail(
+                    destination, offset, value, pending_scalar_policy) ||
+                    changed;
                 continue;
             }
             auto candidate = value;
@@ -7625,9 +7844,9 @@ bool merge_state(AbstractState& destination,
         if (destination.stack_values.contains(offset))
             continue;
         if (stack_tail_value_at(destination, offset) != nullptr) {
-            fold_stack_value_into_tail(
-                destination, offset, value, pending_scalar_policy);
-            changed = true;
+            changed = fold_stack_value_into_tail(
+                destination, offset, value, pending_scalar_policy) ||
+                changed;
             continue;
         }
         if (!has_saved_stack_epoch(value) &&
@@ -7674,19 +7893,12 @@ bool merge_state(AbstractState& destination,
             changed = true;
         }
     }
-    const auto stack_values_before_tail_normalization =
-        destination.stack_values;
-    const auto stack_tail_before_normalization = destination.stack_tail;
-    merge_stack_tail_summary(
-        destination, source.stack_tail, pending_scalar_policy);
-    normalize_stack_tail_summary(
+    changed = merge_stack_tail_summary(
+        destination, source.stack_tail, pending_scalar_policy) || changed;
+    changed = normalize_stack_tail_summary(
         destination,
         may_merge_stack_values || destination.stack_tail.present,
-        pending_scalar_policy);
-    changed = changed ||
-              destination.stack_values !=
-                  stack_values_before_tail_normalization ||
-              destination.stack_tail != stack_tail_before_normalization;
+        pending_scalar_policy) || changed;
     for (auto value = destination.memory_values.begin();
          value != destination.memory_values.end();) {
         const auto source_value = source.memory_values.find(value->first);
@@ -8005,6 +8217,20 @@ void clear_written(AbstractState& state, const katana::sh4::DecodedInstruction& 
     }
 }
 
+// Products may contain repeated or wrapping results. The inventory bound
+// applies to distinct values, and downstream merges require canonical sets.
+// Return false only when adding a new member would exceed that bound.
+bool insert_bounded_inventory_result(std::vector<std::uint32_t>& values,
+                                     const std::uint32_t value) {
+    const auto position = values.empty() || value > values.back()
+                              ? values.end()
+                              : std::lower_bound(values.begin(), values.end(), value);
+    if (position != values.end() && *position == value) return true;
+    if (values.size() >= maximum_guarded_code_inventory) return false;
+    values.insert(position, value);
+    return true;
+}
+
 void apply_binary(AbstractValue& destination,
                   const AbstractValue& source,
                   const katana::sh4::InstructionKind kind) {
@@ -8061,9 +8287,7 @@ void apply_binary(AbstractValue& destination,
                         pending_abi_scalar_values_truncated = true;
                         return;
                     }
-                    transformed.push_back(*result);
-                    if (transformed.size() >
-                        maximum_guarded_code_inventory) {
+                    if (!insert_bounded_inventory_result(transformed, *result)) {
                         pending_abi_scalar_values.clear();
                         pending_abi_scalar_values_truncated = true;
                         return;
@@ -8092,9 +8316,7 @@ void apply_binary(AbstractValue& destination,
                     pending_abi_scalar_values_truncated = true;
                     break;
                 }
-                transformed.push_back(*result);
-                if (transformed.size() >
-                    maximum_guarded_code_inventory) {
+                if (!insert_bounded_inventory_result(transformed, *result)) {
                     pending_abi_scalar_values.clear();
                     pending_abi_scalar_values_truncated = true;
                     break;
@@ -8373,7 +8595,7 @@ void invalidate_memory_values_conservatively(AbstractState& state);
                     return;
                 }
                 absorb_inventory_saved_stack_epoch_candidate_carrier(
-                    projected_carrier, epoch);
+                    projected_carrier, epoch, InventoryCarrierProjection::AllLanes);
                 missing_epoch_alternative = true;
                 return;
             }
@@ -8435,7 +8657,9 @@ exact_stack_relative_offsets_from_addend(const AbstractValue& addend) {
     return offsets;
 }
 
-void load_memory_values(AbstractValue& destination,
+void load_memory_values(const std::uint32_t load_site,
+                        const std::uint8_t destination_register,
+                        AbstractValue& destination,
                         AbstractState& state,
                         const std::vector<std::uint32_t>& addresses,
                         const std::size_t width,
@@ -8488,7 +8712,8 @@ void load_memory_values(AbstractValue& destination,
             selected_domain_carrier, stored);
         absorb_inventory_saved_stack_epoch_candidate_carrier(
             selected_domain_carrier,
-            stored.inventory_saved_stack_epoch);
+            stored.inventory_saved_stack_epoch,
+            InventoryCarrierProjection::CandidateLanes);
     };
     if (width == 4u && !exact_cell_load) {
         if (address_domain_complete) {
@@ -8530,17 +8755,41 @@ void load_memory_values(AbstractValue& destination,
         static_cast<void>(merge_inventory_candidate_carrier(
             domain_carrier, state.inventory_unresolved_memory_carrier));
         absorb_inventory_saved_stack_epoch_candidate_carrier(
-            domain_carrier, state.inventory_unresolved_memory_epoch);
+            domain_carrier, state.inventory_unresolved_memory_epoch,
+            InventoryCarrierProjection::CandidateLanes);
         static_cast<void>(merge_inventory_candidate_carrier(
             domain_carrier, selected_domain_carrier));
         if (address_may_alias_stack) {
             static_cast<void>(merge_inventory_candidate_carrier(
                 domain_carrier, state.inventory_unresolved_stack_carrier));
             absorb_inventory_saved_stack_epoch_candidate_carrier(
-                domain_carrier, state.inventory_unresolved_stack_epoch);
+                domain_carrier, state.inventory_unresolved_stack_epoch,
+                InventoryCarrierProjection::CandidateLanes);
         }
+        const bool had_code_top = value.inventory_code_pointer_values_truncated;
         overlay_inventory_domain_candidate_carrier(value, domain_carrier);
         overlay_value_pending_carrier(value, domain_carrier);
+        if (!had_code_top && value.inventory_code_pointer_values_truncated)
+            emit_bounded_analyzer_diagnostic(
+                20u, 0u, load_site, 0u, destination_register, [&] {
+                    const auto flags = [](const auto& carrier) {
+                        return static_cast<unsigned>(carrier.inventory_code_pointer_values_truncated) |
+                            (static_cast<unsigned>(carrier.inventory_pc_relative_code_literal_values_truncated) << 1u) |
+                            (static_cast<unsigned>(carrier.pending_abi_scalar_values_truncated) << 2u);
+                    };
+                    std::fprintf(stderr,
+                        "KATANA_ANALYZER_LOAD_TOP site=0x%08X register=%u "
+                        "address_complete=%u stack_alias=%u addresses=%zu "
+                        "selected_flags=%u memory_flags=%u stack_flags=%u "
+                        "merged_flags=%u memory_epoch=%u stack_epoch=%u\n",
+                        static_cast<unsigned>(load_site), static_cast<unsigned>(destination_register),
+                        static_cast<unsigned>(address_domain_complete),
+                        static_cast<unsigned>(address_may_alias_stack), addresses.size(),
+                        flags(selected_domain_carrier), flags(state.inventory_unresolved_memory_carrier),
+                        flags(state.inventory_unresolved_stack_carrier), flags(domain_carrier),
+                        static_cast<unsigned>(inventory_saved_stack_epoch_truncated(state.inventory_unresolved_memory_epoch)),
+                        static_cast<unsigned>(inventory_saved_stack_epoch_truncated(state.inventory_unresolved_stack_epoch)));
+                });
     };
     if (width == 4u) {
         if (!address_domain_complete) {
@@ -8720,7 +8969,19 @@ void store_memory_values(AbstractState& state,
                          const std::size_t width,
                          const AbstractValue& value,
                          const AbstractValue& address_evidence,
-                         const bool inventory_fixed_storage_reference = false) {
+                         const bool inventory_fixed_storage_reference = false,
+                         const bool inventory_current_stack_target = false) {
+    if (inventory_current_stack_target) {
+        // Finite current-epoch coordinates are an Inventory MUST domain,
+        // even when the ordinary singleton stack coordinate is unavailable.
+        // The Stack store owns its payload. Preserve conservative ordinary
+        // Memory effects without publishing that payload as an unrelated
+        // addressless Memory alternative on every subsequent long load.
+        state.memory_definitely_written_ranges.clear();
+        mark_unknown_memory_write(state);
+        invalidate_memory_values_conservatively(state);
+        return;
+    }
     const auto retain_imprecise_store = [&] {
         state.memory_definitely_written_ranges.clear();
         mark_unknown_memory_write(state);
@@ -8971,9 +9232,13 @@ r0_indexed_stack_slot(const AbstractState& state,
 r0_indexed_inventory_stack_slots(const AbstractState& state,
                                  const std::uint8_t other_register,
                                  bool* const coordinate_enumeration_failed =
+                                     nullptr,
+                                 bool* const exclusive_current_coordinates =
                                      nullptr) {
     if (coordinate_enumeration_failed != nullptr)
         *coordinate_enumeration_failed = false;
+    if (exclusive_current_coordinates != nullptr)
+        *exclusive_current_coordinates = false;
     if (other_register == 0u) return {};
     std::vector<std::int32_t> result;
     bool invalid_coordinates = false;
@@ -9009,6 +9274,13 @@ r0_indexed_inventory_stack_slots(const AbstractState& state,
                 }
             }
         }
+        if (exclusive_current_coordinates != nullptr)
+            *exclusive_current_coordinates =
+                state[displacement_register].complete &&
+                !state.stack_may_alias[displacement_register] &&
+                !has_saved_stack_epoch(state[displacement_register]) &&
+                !inventory_saved_stack_epoch_has_detached_root(
+                    state[stack_register].inventory_saved_stack_epoch);
     };
     append(other_register, 0u);
     if (result.empty() && !invalid_coordinates)
@@ -9944,13 +10216,13 @@ materialize_raw_stack_storage_saved_epoch(const AbstractState& state,
     const AbstractValue& source) {
     InventoryCandidateCarrier carrier;
     absorb_inventory_saved_stack_epoch_candidate_carrier(
-        carrier, source.inventory_saved_stack_epoch);
+        carrier, source.inventory_saved_stack_epoch,
+        InventoryCarrierProjection::CandidateLanes);
 
     auto value = source;
     value.inventory_saved_stack_epoch = {};
     value.inventory_stack_callback_loss_unresolved = false;
     overlay_inventory_domain_candidate_carrier(value, carrier);
-    overlay_value_pending_carrier(value, carrier);
     return value;
 }
 
@@ -10006,7 +10278,8 @@ materialize_raw_stack_storage_saved_epoch(const AbstractState& state,
     InventoryCandidateCarrier retained_may;
     absorb_inventory_candidate_payload(retained_may, value);
     absorb_inventory_saved_stack_epoch_candidate_carrier(
-        retained_may, value.inventory_saved_stack_epoch);
+        retained_may, value.inventory_saved_stack_epoch,
+        InventoryCarrierProjection::CandidateLanes);
     make_unknown(value);
     if (!has_inventory_candidate_carrier_payload(retained_may))
         return false;
@@ -11280,10 +11553,9 @@ void branch_inventory_stack_position(
                 for (const auto delta : deltas) {
                     if (branched_pending_abi_scalar_values_truncated)
                         break;
-                    branched_pending_abi_scalar_values.push_back(
-                        value + static_cast<std::uint32_t>(delta));
-                    if (branched_pending_abi_scalar_values.size() >
-                        maximum_guarded_code_inventory) {
+                    if (!insert_bounded_inventory_result(
+                            branched_pending_abi_scalar_values,
+                            value + static_cast<std::uint32_t>(delta))) {
                         branched_pending_abi_scalar_values.clear();
                         branched_pending_abi_scalar_values_truncated = true;
                         break;
@@ -11665,12 +11937,120 @@ std::vector<std::uint32_t> indexed_addresses(const AbstractValue& left,
     return addresses;
 }
 
+class PendingTopOriginDiagnostic final {
+public:
+    PendingTopOriginDiagnostic(const AbstractState& state,
+                              const std::uint32_t site,
+                              const char* phase,
+                              const katana::sh4::DisassemblyLine* line = nullptr)
+        : line_(line), state_(state), site_(site), phase_(phase) {
+        if (!enabled()) return;
+        snapshot(before_);
+        if (line_ == nullptr || line_->instruction.source_register >= 16u) return;
+        const auto index = line_->instruction.source_register;
+        const auto& value = state_[index];
+        source_known_ = value.known;
+        source_complete_ = value.complete;
+        source_values_ = value.values.size();
+        source_first_ = value.values.empty() ? 0u : value.values.front();
+        source_stack_offset_ = state_.stack_offsets[index].value_or(INT32_MAX);
+        source_inventory_offset_ = state_.inventory_stack_offsets[index].value_or(INT32_MAX);
+        source_inventory_offsets_ = state_.inventory_stack_offset_candidates[index].size();
+        source_epoch_ = has_saved_stack_epoch(value);
+        source_current_epoch_ = inventory_saved_stack_epoch_root_tracks_current(value.inventory_saved_stack_epoch);
+        source_detached_epoch_ = inventory_saved_stack_epoch_has_detached_root(value.inventory_saved_stack_epoch);
+        source_stack_derived_ = value.inventory_stack_derived;
+    }
+    ~PendingTopOriginDiagnostic() {
+        if (!enabled()) return;
+        std::array<std::uint8_t, 18u> after{};
+        snapshot(after);
+        for (std::uint8_t lane = 0u; lane < after.size(); ++lane) {
+            if ((before_[lane] & 4u) != 0u || (after[lane] & 4u) == 0u) continue;
+            emit_bounded_analyzer_diagnostic(22u, 0u, site_, 0u, lane, [&] {
+                std::fprintf(stderr,
+                    "KATANA_ANALYZER_PENDING_ORIGIN phase=%s site=0x%08X lane=%u "
+                    "before_flags=%u after_flags=%u memory_flags=%u stack_flags=%u\n",
+                    phase_, static_cast<unsigned>(site_), static_cast<unsigned>(lane),
+                    static_cast<unsigned>(before_[lane]), static_cast<unsigned>(after[lane]),
+                    static_cast<unsigned>(after[16u]), static_cast<unsigned>(after[17u]));
+            });
+            if (line_ != nullptr && lane == line_->instruction.destination_register) {
+                using K = katana::sh4::InstructionKind;
+                const auto kind = line_->instruction.kind;
+                if (kind != K::MovLongLoad && kind != K::MovLongLoadPostIncrement &&
+                    kind != K::MovLongLoadDisplacement && kind != K::MovLongLoadR0Indexed)
+                    continue;
+                emit_bounded_analyzer_diagnostic(23u, 0u, site_, 0u, lane, [&] {
+                    const auto stack_tops = std::count_if(state_.stack_values.begin(), state_.stack_values.end(),
+                        [](const auto& cell) { return cell.second.pending_abi_scalar_values_truncated; });
+                    const auto memory_tops = std::count_if(state_.memory_values.begin(), state_.memory_values.end(),
+                        [](const auto& cell) { return cell.second.pending_abi_scalar_values_truncated; });
+                    std::fprintf(stderr,
+                        "KATANA_ANALYZER_PENDING_LOAD site=0x%08X opcode=0x%04X source=%u dest=%u "
+                        "known=%u complete=%u values=%zu first=0x%08X stack_offset=%d inventory_offset=%d "
+                        "inventory_offsets=%zu epoch=%u current=%u detached=%u stack_derived=%u "
+                        "stack_top_cells=%zu memory_top_cells=%zu tail=%u tail_pending_top=%u\n",
+                        static_cast<unsigned>(site_), static_cast<unsigned>(line_->opcode),
+                        static_cast<unsigned>(line_->instruction.source_register), static_cast<unsigned>(lane),
+                        static_cast<unsigned>(source_known_), static_cast<unsigned>(source_complete_),
+                        source_values_, static_cast<unsigned>(source_first_), source_stack_offset_, source_inventory_offset_,
+                        source_inventory_offsets_, static_cast<unsigned>(source_epoch_),
+                        static_cast<unsigned>(source_current_epoch_), static_cast<unsigned>(source_detached_epoch_),
+                        static_cast<unsigned>(source_stack_derived_), static_cast<std::size_t>(stack_tops),
+                        static_cast<std::size_t>(memory_tops), static_cast<unsigned>(state_.stack_tail.present),
+                        static_cast<unsigned>(state_.stack_tail.payload.pending_abi_scalar_values_truncated));
+                });
+            }
+        }
+    }
+private:
+    const katana::sh4::DisassemblyLine* line_ = nullptr;
+    std::size_t source_values_ = 0u;
+    std::size_t source_inventory_offsets_ = 0u;
+    std::uint32_t source_first_ = 0u;
+    std::int32_t source_stack_offset_ = INT32_MAX;
+    std::int32_t source_inventory_offset_ = INT32_MAX;
+    bool source_known_ = false;
+    bool source_complete_ = false;
+    bool source_epoch_ = false;
+    bool source_current_epoch_ = false;
+    bool source_detached_epoch_ = false;
+    bool source_stack_derived_ = false;
+    static bool enabled() {
+        // This expensive first-producer trace is fixed for the diagnostic
+        // process and stays off in ordinary loss capsules and product runs.
+        static const bool enabled_for_process = [] {
+            const auto* value = std::getenv("CODEX_ANALYZER_STACK_DIAGNOSTICS");
+            return value != nullptr && std::strcmp(value, "origins") == 0;
+        }();
+        return enabled_for_process;
+    }
+    void snapshot(std::array<std::uint8_t, 18u>& out) const {
+        const auto flags = [](const auto& value) {
+            return static_cast<std::uint8_t>(
+                static_cast<unsigned>(value.inventory_code_pointer_values_truncated) |
+                (static_cast<unsigned>(value.inventory_pc_relative_code_literal_values_truncated) << 1u) |
+                (static_cast<unsigned>(value.pending_abi_scalar_values_truncated) << 2u));
+        };
+        for (std::size_t index = 0u; index < state_.size(); ++index)
+            out[index] = flags(state_[index]);
+        out[16u] = flags(state_.inventory_unresolved_memory_carrier);
+        out[17u] = flags(state_.inventory_unresolved_stack_carrier);
+    }
+    const AbstractState& state_;
+    std::uint32_t site_;
+    const char* phase_;
+    std::array<std::uint8_t, 18u> before_{};
+};
+
 void apply_transfer(AbstractState& state,
                     const katana::sh4::DisassemblyLine& line,
                     const katana::io::ExecutableImage& image,
                     const bool preserve_guarded_stack_inventory = false,
                     MemoryReadObservation* const
                         memory_read_observation = nullptr) {
+    const PendingTopOriginDiagnostic pending_origin{state, line.address, "transfer", &line};
     [[maybe_unused]] const InventoryStackOffsetLossDiagnostic
         inventory_sp_loss_diagnostic{
             state, line.address, state.inventory_stack_offsets[15u]};
@@ -12113,7 +12493,8 @@ void apply_transfer(AbstractState& state,
             instruction.kind == katana::sh4::InstructionKind::MovWordLoadPcRelative ? 2u : 4u;
         const auto base = width == 4u ? (line.address + 4u) & ~3u : line.address + 4u;
         bool exact_saved_stack_restore = false;
-        load_memory_values(state[instruction.destination_register],
+        load_memory_values(line.address, instruction.destination_register,
+                           state[instruction.destination_register],
                            state,
                            {base + static_cast<std::uint32_t>(instruction.displacement)},
                            width,
@@ -12217,7 +12598,9 @@ void apply_transfer(AbstractState& state,
                                 width,
                                 stored_value,
                                 state[instruction.destination_register],
-                                incoming_destination_fixed_storage_reference);
+                                incoming_destination_fixed_storage_reference,
+                                !inventory_offsets.empty() &&
+                                    !write_domain.touches_detached());
         }
         return;
     }
@@ -12275,7 +12658,9 @@ void apply_transfer(AbstractState& state,
                                 width,
                                 stored_value,
                                 state[instruction.destination_register],
-                                incoming_destination_fixed_storage_reference);
+                                incoming_destination_fixed_storage_reference,
+                                !inventory_offsets.empty() &&
+                                    !write_domain.touches_detached());
         }
         return;
     }
@@ -12332,7 +12717,8 @@ void apply_transfer(AbstractState& state,
                 width,
                 stored_value,
                 state[instruction.destination_register],
-                incoming_destination_fixed_storage_reference);
+                incoming_destination_fixed_storage_reference,
+                !inventory_offsets.empty() && !write_domain.touches_detached());
         }
         return;
     }
@@ -12377,7 +12763,8 @@ void apply_transfer(AbstractState& state,
                 width,
                 &exact_saved_stack_restore);
         } else {
-            load_memory_values(state[instruction.destination_register],
+            load_memory_values(line.address, instruction.destination_register,
+                               state[instruction.destination_register],
                                state,
                                memory_addresses,
                                width,
@@ -12469,7 +12856,8 @@ void apply_transfer(AbstractState& state,
                 width,
                 &exact_saved_stack_restore);
         } else {
-            load_memory_values(state[instruction.destination_register],
+            load_memory_values(line.address, instruction.destination_register,
+                               state[instruction.destination_register],
                                state,
                                memory_addresses,
                                width,
@@ -12578,6 +12966,7 @@ void apply_transfer(AbstractState& state,
                 &exact_saved_stack_restore);
         } else {
             load_memory_values(
+                line.address, instruction.destination_register,
                 state[instruction.destination_register],
                 state,
                 memory_addresses,
@@ -12637,11 +13026,13 @@ void apply_transfer(AbstractState& state,
         const auto offset = r0_indexed_stack_slot(
             state, instruction.destination_register);
         bool inventory_coordinate_enumeration_failed = false;
+        bool inventory_current_stack_target = false;
         const auto inventory_offsets =
             r0_indexed_inventory_stack_slots(
                 state,
                 instruction.destination_register,
-                &inventory_coordinate_enumeration_failed);
+                &inventory_coordinate_enumeration_failed,
+                &inventory_current_stack_target);
         const auto may_alias_stack =
             state.stack_may_alias[0u] ||
             state.stack_may_alias[instruction.destination_register] ||
@@ -12723,7 +13114,11 @@ void apply_transfer(AbstractState& state,
                 (incoming_r0_fixed_storage_reference &&
                  state[instruction.destination_register].known) ||
                     (incoming_destination_fixed_storage_reference &&
-                     state[0u].known));
+                     state[0u].known),
+                !inventory_offsets.empty() &&
+                    !inventory_coordinate_enumeration_failed &&
+                    inventory_current_stack_target &&
+                    !write_domain.touches_detached());
         return;
     }
     case katana::sh4::InstructionKind::FmovStore: {
@@ -12982,7 +13377,9 @@ void apply_transfer(AbstractState& state,
                                 4u,
                                 unknown,
                                 state[instruction.destination_register],
-                                incoming_destination_fixed_storage_reference);
+                                incoming_destination_fixed_storage_reference,
+                                !inventory_offsets.empty() &&
+                                    !write_domain.touches_detached());
         }
         return;
     }
@@ -13135,6 +13532,7 @@ void apply_transfer(AbstractState& state,
                 &exact_saved_stack_restore);
         } else {
             load_memory_values(
+                line.address, instruction.destination_register,
                 state[instruction.destination_register],
                 state,
                 memory_addresses,
@@ -13994,11 +14392,19 @@ void promote_current_saved_epoch_pending_in_observation(
 
 void mark_observed_code_pointer_arguments(
     const katana::io::ExecutableImage& image,
-    AbstractState& observation) {
+    AbstractState& observation,
+    const std::uint32_t owner = 0u,
+    const std::uint32_t call_site = 0u,
+    const std::uint32_t callee = 0u) {
     // This provenance belongs to the value passed in an ABI argument register,
     // not to an address used to load that value.  Loads deliberately do not
     // inherit it from their address operand.
     const auto mark_argument = [&](AbstractValue& value) {
+        const bool had_code_top = value.inventory_code_pointer_values_truncated;
+        const bool had_literal_top = value.inventory_pc_relative_code_literal_values_truncated;
+        const bool had_pending_top = value.pending_abi_scalar_values_truncated;
+        const auto prior_code_count = value.inventory_code_pointer_values.size();
+        const auto prior_pending_count = value.pending_abi_scalar_values.size();
         std::vector<std::uint32_t> candidates;
         if (value.known && value.values.size() <= maximum_summary_values)
             candidates = value.values;
@@ -14024,6 +14430,19 @@ void mark_observed_code_pointer_arguments(
         }
         const auto promoted_pending =
             promote_pending_abi_scalars_at_abi_boundary(image, value);
+        if (!had_code_top && value.inventory_code_pointer_values_truncated)
+            emit_bounded_analyzer_diagnostic(
+                21u, owner, call_site, callee, 0u, [&] {
+                    std::fprintf(stderr,
+                        "KATANA_ANALYZER_ARGUMENT_TOP owner=0x%08X site=0x%08X "
+                        "target=0x%08X literal_top=%u pending_top=%u "
+                        "prior_code=%zu prior_pending=%zu promoted=%zu known=%u values=%zu\n",
+                        static_cast<unsigned>(owner), static_cast<unsigned>(call_site),
+                        static_cast<unsigned>(callee), static_cast<unsigned>(had_literal_top),
+                        static_cast<unsigned>(had_pending_top), prior_code_count,
+                        prior_pending_count, candidates.size(), static_cast<unsigned>(value.known),
+                        value.values.size());
+                });
         if (candidates.empty() &&
             !value.inventory_pc_relative_code_literal_values_truncated &&
             !promoted_pending)
@@ -14118,7 +14537,9 @@ void promote_tail_code_literal_arguments(
 
 void promote_contextual_tail_code_arguments(
     const katana::io::ExecutableImage& image,
+    const std::uint32_t owner,
     const std::uint32_t transfer_site,
+    const std::uint32_t callee,
     AbstractState& observation,
     const std::uint16_t register_read_mask,
     const std::uint32_t inventory_provenance_register_read_mask,
@@ -14130,7 +14551,10 @@ void promote_contextual_tail_code_arguments(
     // This keeps decode-looking object fields and unrelated scalar registers
     // out of the inventory while preserving exact values returned by a
     // bounded helper slice on the way to a candidate registrar.
-    const auto promote_argument = [&](AbstractValue& value) {
+    const auto promote_argument = [&](AbstractValue& value,
+                                      const bool stack_lane,
+                                      const std::uint32_t lane,
+                                      const std::uint8_t consumption) {
         if (!value.contextual_candidate_dependency) return;
 
         // Preserve a stronger finite proof established by the preceding
@@ -14162,6 +14586,35 @@ void promote_contextual_tail_code_arguments(
         if ((!value.known || !value.complete ||
              value.values.size() > maximum_summary_values) &&
             !had_finite_inventory_candidate) {
+            if (!value.inventory_code_pointer_values_truncated)
+                emit_bounded_analyzer_diagnostic(
+                    19u, owner, transfer_site, callee,
+                    static_cast<std::uint8_t>(stack_lane ? 16u : lane), [&] {
+                        std::fprintf(stderr,
+                            "KATANA_ANALYZER_CONTEXTUAL_TOP owner=0x%08X "
+                            "site=0x%08X target=0x%08X domain=%s key=0x%08X "
+                            "ordinary_read=%u inventory_read=%u tail_sink=%u "
+                            "stack_read=%u known=%u complete=%u values=%zu "
+                            "code_top=%u literal_top=%u pending_top=%u epoch_top=%u "
+                            "code=%zu literal=%zu pending=%zu\n",
+                            static_cast<unsigned>(owner),
+                            static_cast<unsigned>(transfer_site),
+                            static_cast<unsigned>(callee),
+                            stack_lane ? "stack" : "register", static_cast<unsigned>(lane),
+                            static_cast<unsigned>((consumption & 1u) != 0u),
+                            static_cast<unsigned>((consumption & 2u) != 0u),
+                            static_cast<unsigned>((consumption & 4u) != 0u),
+                            static_cast<unsigned>((consumption & 8u) != 0u),
+                            static_cast<unsigned>(value.known),
+                            static_cast<unsigned>(value.complete), value.values.size(),
+                            static_cast<unsigned>(value.inventory_code_pointer_values_truncated),
+                            static_cast<unsigned>(value.inventory_pc_relative_code_literal_values_truncated),
+                            static_cast<unsigned>(value.pending_abi_scalar_values_truncated),
+                            static_cast<unsigned>(inventory_saved_stack_epoch_truncated(value.inventory_saved_stack_epoch)),
+                            value.inventory_code_pointer_values.size(),
+                            value.inventory_pc_relative_code_literal_values.size(),
+                            value.pending_abi_scalar_values.size());
+                    });
             value.inventory_code_pointer_values.clear();
             value.inventory_code_pointer_values_truncated = true;
             synchronize_inventory_provenance(value);
@@ -14177,15 +14630,16 @@ void promote_contextual_tail_code_arguments(
         inventory_provenance_register_read_mask !=
         std::numeric_limits<std::uint32_t>::max();
     for (std::uint8_t index = 4u; index <= 7u; ++index) {
-        const bool consumed =
+        const std::uint8_t consumption = static_cast<std::uint8_t>(
             (exact_register_reads &&
-             (register_read_mask & register_bit(index)) != 0u) ||
+             (register_read_mask & register_bit(index)) != 0u ? 1u : 0u) |
             (exact_inventory_reads &&
              (inventory_provenance_register_read_mask &
-              (std::uint32_t{1u} << index)) != 0u) ||
-            (tail_abi_sink_sources &
-             static_cast<std::uint8_t>(1u << (index - 4u))) != 0u;
-        if (consumed) promote_argument(observation[index]);
+              (std::uint32_t{1u} << index)) != 0u ? 2u : 0u) |
+            ((tail_abi_sink_sources &
+              static_cast<std::uint8_t>(1u << (index - 4u))) != 0u ? 4u : 0u));
+        if (consumption != 0u)
+            promote_argument(observation[index], false, index, consumption);
     }
 
     // A finite, complete stack-read contract is required.  Unknown stack
@@ -14196,10 +14650,11 @@ void promote_contextual_tail_code_arguments(
     for (const auto slot : required_stack_reads->slots) {
         if (const auto found = observation.stack_values.find(slot);
             found != observation.stack_values.end())
-            promote_argument(found->second);
+            promote_argument(found->second, true, static_cast<std::uint32_t>(slot), 8u);
         else if (observation.stack_tail.present &&
                  slot >= observation.stack_tail.lower_bound)
-            promote_argument(observation.stack_tail.payload);
+            promote_argument(observation.stack_tail.payload, true,
+                             static_cast<std::uint32_t>(slot), 8u);
     }
 }
 
@@ -14340,7 +14795,7 @@ void observe_callee_arguments(
         // boundary.  Otherwise an ordinary-only register/stack read could be
         // promoted into Inventory even though this callee cannot carry it to
         // an inventory or state sink.
-        mark_observed_code_pointer_arguments(image, observation);
+        mark_observed_code_pointer_arguments(image, observation, owner, call_site, candidate);
         normalize_stack_tail_summary(
             observation,
             true,
@@ -14795,7 +15250,9 @@ void observe_inventory_transfers(
             if (guarded && !complete && requires_code_pointer)
                 promote_contextual_tail_code_arguments(
                     image,
+                    owner,
                     transfer_site,
+                    candidate_callee.address,
                     observation,
                     register_mask,
                     inventory_provenance_mask,
@@ -15006,6 +15463,7 @@ void apply_call(AbstractState& state,
                      inventory_stack_alias_creation_contracts = nullptr) {
     const ApplyCallDiagnosticsScope diagnostics_scope{
         hot_path_diagnostics};
+    const PendingTopOriginDiagnostic pending_origin{state, call_site, "call"};
     ObservedCalleeInputs observed_inputs;
     ObservedCalleeInputIndices observed_input_indices;
     observe_callee_arguments(
@@ -16407,10 +16865,31 @@ void observe_stored_code_addresses(
         contextual_candidate_top(value) &&
         !has_finite_inventory_candidate_values(value);
     if (walk_diagnostics != nullptr) {
+        const bool was_truncated =
+            walk_diagnostics->inventory_candidate_values_truncated;
         walk_diagnostics->inventory_candidate_values_truncated =
             walk_diagnostics->inventory_candidate_values_truncated ||
             inventory_candidate_values_truncated(value) ||
             contextual_candidate_unrepresented;
+        if (!was_truncated &&
+            walk_diagnostics->inventory_candidate_values_truncated)
+            emit_bounded_analyzer_diagnostic(
+                18u, 0u, line.address, instruction.source_register, 0u, [&] {
+                    std::fprintf(stderr,
+                        "KATANA_ANALYZER_STORED_LOSS site=0x%08X register=%u "
+                        "context_top=%u code_top=%u literal_top=%u epoch_top=%u "
+                        "known=%u values=%zu code=%zu literal=%zu pending=%zu\n",
+                        static_cast<unsigned>(line.address),
+                        static_cast<unsigned>(instruction.source_register),
+                        static_cast<unsigned>(contextual_candidate_unrepresented),
+                        static_cast<unsigned>(value.inventory_code_pointer_values_truncated),
+                        static_cast<unsigned>(value.inventory_pc_relative_code_literal_values_truncated),
+                        static_cast<unsigned>(inventory_saved_stack_epoch_truncated(value.inventory_saved_stack_epoch)),
+                        static_cast<unsigned>(value.known), value.values.size(),
+                        value.inventory_code_pointer_values.size(),
+                        value.inventory_pc_relative_code_literal_values.size(),
+                        value.pending_abi_scalar_values.size());
+                });
         observe_inventory_stack_value_loss(walk_diagnostics, value);
     }
 
@@ -16510,6 +16989,7 @@ void observe_returned_code_address_tables(
                });
     };
     AbstractValue effective_address;
+    bool address_evidence_truncated = false;
     switch (line.instruction.kind) {
     case K::MovLongLoad:
     case K::MovLongLoadPostIncrement: {
@@ -16538,6 +17018,12 @@ void observe_returned_code_address_tables(
         const auto base_register = line.instruction.source_register;
         const auto& index = state[0u];
         const auto& base = state[base_register];
+        // The effective-address value below intentionally contains scalar
+        // address facts only. Preserve losses from both original operands,
+        // including saved-stack epochs, before constructing that view.
+        address_evidence_truncated =
+            inventory_candidate_values_truncated(index) ||
+            inventory_candidate_values_truncated(base);
         effective_address.known = index.known && base.known;
         effective_address.guarded = index.guarded || base.guarded;
         effective_address.complete = index.complete && base.complete;
@@ -16567,9 +17053,14 @@ void observe_returned_code_address_tables(
     const bool observer_provenance_relevant =
         !effective_address.call_sites.empty() &&
         !effective_address.callees.empty();
+    // An unknown factory result used for an ordinary object-field load is
+    // not evidence that a callback table was lost. Its contextual provenance
+    // is transported by load_memory_values and checked at an actual indirect
+    // transfer or persistent-code sink. Real candidate/epoch truncation must
+    // still fail closed even when this optional table scan cannot proceed.
     if (walk_diagnostics != nullptr && observer_provenance_relevant &&
-        !finite_effective_address &&
-        contextual_candidate_top(effective_address))
+        (address_evidence_truncated ||
+         inventory_candidate_values_truncated(effective_address)))
         walk_diagnostics->inventory_candidate_values_truncated = true;
     if (!finite_effective_address || !observer_provenance_relevant)
         return;
@@ -16665,10 +17156,185 @@ void throw_if_resolution_cancelled(
     throw_if_resolution_cancelled(&cancellation);
 }
 
+// A branch may constrain a finite scalar only when its T producer is the
+// immediately preceding comparison. Keep this separate from CFG discovery:
+// it refines this evaluation's edge state, never publishes a new CFG proof.
+struct ComparedBranchPredicate final {
+    katana::sh4::InstructionKind comparison;
+    std::uint8_t left_register = 0u;
+    std::optional<std::uint8_t> right_register;
+    std::uint32_t right_immediate = 0u;
+    std::uint32_t target = 0u;
+    std::uint32_t fallthrough = 0u;
+    bool target_when_true = false;
+};
+
+[[nodiscard]] std::optional<ComparedBranchPredicate>
+compared_branch_predicate(const BasicBlock& block) {
+    using K = katana::sh4::InstructionKind;
+    if (block.lines.size() < 2u) return std::nullopt;
+    const auto& branch = controlling_line(block);
+    const auto kind = branch.instruction.kind;
+    if (kind != K::Bt && kind != K::Bf && kind != K::BtS && kind != K::BfS)
+        return std::nullopt;
+    if (!branch.target_address.has_value()) return std::nullopt;
+    const bool delayed = kind == K::BtS || kind == K::BfS;
+    const auto branch_index = block.lines.size() - (delayed ? 2u : 1u);
+    if (branch_index == 0u) return std::nullopt;
+    // A plain MOV.L store changes neither compared registers nor T. Its
+    // memory/epoch effects must nevertheless run on the refined edge state,
+    // not on the unbounded common state (notably for stack loop counters).
+    // Other active slots retain the ordinary conservative transfer path.
+    if (delayed && (!block.lines.back().is_delay_slot ||
+                    block.lines.back().address != branch.address + 2u ||
+                    (block.lines.back().instruction.kind != K::Nop &&
+                     block.lines.back().instruction.kind != K::MovLongStore)))
+        return std::nullopt;
+    const auto& comparison = block.lines[branch_index - 1u];
+    if (comparison.is_delay_slot || comparison.address + 2u != branch.address)
+        return std::nullopt;
+    ComparedBranchPredicate predicate;
+    predicate.comparison = comparison.instruction.kind;
+    predicate.left_register = comparison.instruction.destination_register;
+    predicate.target = *branch.target_address;
+    predicate.fallthrough = branch.address + (delayed ? 4u : 2u);
+    predicate.target_when_true = kind == K::Bt || kind == K::BtS;
+    if (predicate.target == predicate.fallthrough) return std::nullopt;
+    switch (predicate.comparison) {
+    case K::CompareEqualRegister:
+    case K::CompareHigherOrSame:
+    case K::CompareGreaterOrEqual:
+    case K::CompareHigher:
+    case K::CompareGreaterThan:
+    case K::TestRegister:
+        predicate.right_register = comparison.instruction.source_register;
+        break;
+    case K::CompareEqualImmediate:
+    case K::TestImmediate:
+        predicate.left_register = 0u;
+        predicate.right_immediate =
+            static_cast<std::uint32_t>(comparison.instruction.immediate);
+        break;
+    case K::ComparePositiveOrZero:
+    case K::ComparePositive:
+        break;
+    default:
+        return std::nullopt;
+    }
+    // Do not refine a symbolic stack coordinate with a numeric scalar view.
+    if (predicate.left_register >= 15u ||
+        (predicate.right_register && *predicate.right_register >= 15u))
+        return std::nullopt;
+    return predicate;
+}
+
+[[nodiscard]] bool compared_branch_truth(
+    const katana::sh4::InstructionKind comparison,
+    const std::uint32_t left, const std::uint32_t right) {
+    using K = katana::sh4::InstructionKind;
+    switch (comparison) {
+    case K::CompareEqualImmediate:
+    case K::CompareEqualRegister: return left == right;
+    case K::CompareHigherOrSame: return left >= right;
+    case K::CompareGreaterOrEqual:
+        return static_cast<std::int32_t>(left) >= static_cast<std::int32_t>(right);
+    case K::CompareHigher: return left > right;
+    case K::CompareGreaterThan:
+        return static_cast<std::int32_t>(left) > static_cast<std::int32_t>(right);
+    case K::ComparePositiveOrZero: return static_cast<std::int32_t>(left) >= 0;
+    case K::ComparePositive: return static_cast<std::int32_t>(left) > 0;
+    case K::TestImmediate:
+    case K::TestRegister: return (left & right) == 0u;
+    default: throw std::logic_error("Unvalidated branch comparison.");
+    }
+}
+
+// Only the compared registers need a temporary edge view. Copying a complete
+// AbstractState here would duplicate every stack/epoch/memory payload twice
+// per conditional block. The scope restores the common state before the next
+// successor and leaves domain-wide MAY carriers and all Top flags untouched.
+class ComparedBranchSuccessorScope final {
+  public:
+    ComparedBranchSuccessorScope(AbstractState& state,
+                                const std::optional<ComparedBranchPredicate>& predicate,
+                                const std::uint32_t successor)
+        : state_(state) {
+        if (!predicate ||
+            (successor != predicate->target && successor != predicate->fallthrough))
+            return;
+        const auto& condition = *predicate;
+        const bool expected = (successor == condition.target) == condition.target_when_true;
+        const auto exact_values = [](const AbstractValue& value) {
+            return value.known && value.complete && !value.guarded &&
+                           value.values.size() <= maximum_summary_values
+                       ? value.values : std::vector<std::uint32_t>{};
+        };
+        // Snapshot both operands before changing either register. A finite
+        // incomplete or guarded partner cannot bound the other operand.
+        const auto left_values = exact_values(state[condition.left_register]);
+        const auto right_values = condition.right_register
+            ? exact_values(state[*condition.right_register])
+            : std::vector<std::uint32_t>{condition.right_immediate};
+        const auto refine = [&](const std::uint8_t reg, const bool is_left,
+                                 const std::vector<std::uint32_t>& partners) {
+            if (partners.empty()) return;
+            const auto slot = saved_count_++;
+            registers_[slot] = reg;
+            saved_[slot].emplace(state[reg]);
+            auto& value = state[reg];
+            const auto impossible = [&](const std::uint32_t candidate) {
+                return std::none_of(partners.begin(), partners.end(), [&](const auto partner) {
+                    return compared_branch_truth(condition.comparison,
+                               is_left ? candidate : partner,
+                               is_left ? partner : candidate) == expected;
+                });
+            };
+            const bool exact_scalar = value.known && value.complete && !value.guarded;
+            if (value.known) {
+                std::erase_if(value.values, impossible);
+                if (value.values.empty()) {
+                    if (exact_scalar) feasible_ = false;
+                    value.known = false;
+                    value.complete = false;
+                }
+            }
+            // Code candidates may already be normalized source addresses,
+            // unlike the raw architectural Scalar/Pending/PC-literal lanes.
+            // A comparison with a physical/P1 alias must not erase that
+            // source-bound evidence. Do not run the ordinary scalar/code
+            // synchronizer on this temporary edge view for the same reason.
+            std::erase_if(value.inventory_pc_relative_code_literal_values, impossible);
+            std::erase_if(value.pending_abi_scalar_values, impossible);
+            value.inventory_pc_relative_code_literal =
+                !value.inventory_pc_relative_code_literal_values.empty();
+        };
+        refine(condition.left_register, true, right_values);
+        if (condition.right_register && *condition.right_register != condition.left_register)
+            refine(*condition.right_register, false, left_values);
+    }
+
+    ~ComparedBranchSuccessorScope() {
+        for (std::size_t index = 0u; index < saved_count_; ++index)
+            state_[registers_[index]] = std::move(*saved_[index]);
+    }
+    ComparedBranchSuccessorScope(const ComparedBranchSuccessorScope&) = delete;
+    ComparedBranchSuccessorScope& operator=(const ComparedBranchSuccessorScope&) = delete;
+    [[nodiscard]] bool feasible() const noexcept { return feasible_; }
+
+  private:
+    AbstractState& state_;
+    std::array<std::optional<AbstractValue>, 2u> saved_;
+    std::array<std::uint8_t, 2u> registers_{};
+    std::size_t saved_count_ = 0u;
+    bool feasible_ = true;
+};
+
 struct FunctionEvaluationPlanBlock final {
     std::uint32_t address = 0u;
     const BasicBlock* block = nullptr;
     std::vector<std::size_t> successors;
+    std::optional<ComparedBranchPredicate> branch_predicate;
+    const katana::sh4::DisassemblyLine* deferred_delay_store = nullptr;
 };
 
 struct FunctionEvaluationPlan final {
@@ -16702,12 +17368,28 @@ struct FunctionEvaluationPlan final {
                    function.block_addresses.end());
     for (auto& planned : plan.blocks) {
         if (planned.block == nullptr) continue;
+        planned.branch_predicate = compared_branch_predicate(*planned.block);
         planned.successors.reserve(planned.block->successors.size());
         for (const auto successor : planned.block->successors) {
             if (!members.contains(successor)) continue;
             const auto found = index_by_address.find(successor);
             if (found != index_by_address.end())
                 planned.successors.push_back(found->second);
+        }
+        if (planned.branch_predicate &&
+            planned.block->lines.back().is_delay_slot &&
+            planned.block->lines.back().instruction.kind ==
+                katana::sh4::InstructionKind::MovLongStore) {
+            const auto represented = [&](const std::uint32_t address) {
+                return std::any_of(planned.successors.begin(), planned.successors.end(),
+                    [&](const auto index) { return plan.blocks[index].address == address; });
+            };
+            if (represented(planned.branch_predicate->target) &&
+                represented(planned.branch_predicate->fallthrough))
+                planned.deferred_delay_store = &planned.block->lines.back();
+            else
+                // Never drop a slot's effects on an external/missing edge.
+                planned.branch_predicate.reset();
         }
     }
     return plan;
@@ -16819,6 +17501,7 @@ FunctionEvaluation evaluate_function(
         guarded_inventory_block_observations.resize(plan.blocks.size());
     std::size_t staged_stored_candidate_count = 0u;
     std::size_t local_fixpoint_iterations = 0u;
+    const bool diagnose_joins = analyzer_join_diagnostics_enabled();
     while (!pending.empty()) {
         throw_if_resolution_cancelled(cancel_requested);
         if (local_fixpoint_iterations >=
@@ -16887,6 +17570,36 @@ FunctionEvaluation evaluate_function(
                     std::make_move_iterator(candidates.begin()),
                     std::make_move_iterator(candidates.end()));
             };
+        const auto observe_non_call_transfer =
+            [&](const katana::sh4::DisassemblyLine& line,
+                const AbstractState& observed_state) {
+                if (guarded_inventory_collector == nullptr) return;
+                std::vector<StoredCodeAddressCandidate> stored_candidates;
+                observe_stored_code_addresses(
+                    image, line, observed_state, may_merge_stack_inventory,
+                    *guarded_inventory_collector, stored_candidates, walk_diagnostics);
+                if (isolated_inventory_call_sites != nullptr) {
+                    for (auto& candidate : stored_candidates) {
+                        candidate.complete = false;
+                        candidate.guarded = true;
+                        candidate.evidence_call_sites.insert(
+                            candidate.evidence_call_sites.end(),
+                            isolated_inventory_call_sites->begin(),
+                            isolated_inventory_call_sites->end());
+                    }
+                }
+                retain_staged_stored_candidates(std::move(stored_candidates));
+                if (isolated_inventory_call_sites == nullptr ||
+                    collect_returned_tables_for_isolated_authority) {
+                    std::vector<ReturnedCodeAddressTableCandidate> returned_tables;
+                    observe_returned_code_address_tables(
+                        image, line, observed_state, returned_tables, walk_diagnostics);
+                    guarded_inventory_observation.returned_tables.insert(
+                        guarded_inventory_observation.returned_tables.end(),
+                        std::make_move_iterator(returned_tables.begin()),
+                        std::make_move_iterator(returned_tables.end()));
+                }
+            };
         struct DelayedCall {
             std::uint32_t call_site = 0u;
             std::optional<std::uint32_t> direct_callee;
@@ -16907,6 +17620,7 @@ FunctionEvaluation evaluate_function(
         std::optional<DelayedTailIngress> delayed_tail_ingress;
         for (const auto& line : block->lines) {
             throw_if_resolution_cancelled(cancel_requested);
+            if (&line == planned_block.deferred_delay_store) continue;
             const auto tail_ingress = select_evaluation_tail_ingress(
                 line.instruction.control_flow,
                 tail_ingresses,
@@ -17042,45 +17756,7 @@ FunctionEvaluation evaluate_function(
             const bool call =
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall;
-            if (!call && guarded_inventory_collector != nullptr) {
-                std::vector<StoredCodeAddressCandidate> stored_candidates;
-                observe_stored_code_addresses(
-                    image,
-                    line,
-                    state,
-                    may_merge_stack_inventory,
-                    *guarded_inventory_collector,
-                    stored_candidates,
-                    walk_diagnostics);
-                if (isolated_inventory_call_sites != nullptr) {
-                    for (auto& candidate : stored_candidates) {
-                        candidate.complete = false;
-                        candidate.guarded = true;
-                        candidate.evidence_call_sites.insert(
-                            candidate.evidence_call_sites.end(),
-                            isolated_inventory_call_sites->begin(),
-                            isolated_inventory_call_sites->end());
-                    }
-
-                }
-                retain_staged_stored_candidates(
-                    std::move(stored_candidates));
-                if (isolated_inventory_call_sites == nullptr ||
-                    collect_returned_tables_for_isolated_authority) {
-                    std::vector<ReturnedCodeAddressTableCandidate>
-                        returned_tables;
-                    observe_returned_code_address_tables(
-                        image,
-                        line,
-                        state,
-                        returned_tables,
-                        walk_diagnostics);
-                    guarded_inventory_observation.returned_tables.insert(
-                        guarded_inventory_observation.returned_tables.end(),
-                        std::make_move_iterator(returned_tables.begin()),
-                        std::make_move_iterator(returned_tables.end()));
-                }
-            }
+            if (!call) observe_non_call_transfer(line, state);
             if (!call) {
                 if (tail_ingress.has_value() &&
                     tail_ingress->observes_abi_arguments)
@@ -17269,12 +17945,40 @@ FunctionEvaluation evaluate_function(
                                 may_merge_stack_inventory));
         }
         for (const auto successor : planned_block.successors) {
+            const ComparedBranchSuccessorScope branch_scope{
+                state, planned_block.branch_predicate,
+                plan.blocks.at(successor).address};
+            if (!branch_scope.feasible()) continue;
+            // Only an active, proven conditional delay store needs this copy.
+            // Execute the normal transfer so aliases, invalidation, Pending,
+            // saved epochs and mutation observations stay in one contract.
+            // The sibling starts from the original pre-delay state after the
+            // scope restores the compared registers, never this mutated copy.
+            std::unique_ptr<AbstractState> delayed_state;
+            if (planned_block.deferred_delay_store != nullptr) {
+                delayed_state = std::make_unique<AbstractState>(state);
+                const auto& line = *planned_block.deferred_delay_store;
+                observe_non_call_transfer(line, *delayed_state);
+                apply_transfer(*delayed_state, line, image,
+                    may_merge_stack_inventory, &evaluation_memory_reads);
+                observe_inventory_domain_losses(walk_diagnostics, *delayed_state);
+            }
+            const auto& outgoing = delayed_state ? *delayed_state : state;
             auto& input = inputs.at(successor);
             const bool inserted = !input.has_value();
-            if (inserted) input.emplace(state);
+            if (inserted) input.emplace(outgoing);
+            const auto before_join =
+                diagnose_joins && sampled_local_iteration && !inserted
+                    ? std::make_unique<AbstractState>(*input)
+                    : nullptr;
             const bool merged =
                 !inserted &&
-                merge_state(*input, state, may_merge_stack_inventory);
+                merge_state(*input, outgoing, may_merge_stack_inventory);
+            if (before_join)
+                emit_analyzer_join_delta(
+                    *before_join, *input, function.entry_address, address,
+                    plan.blocks.at(successor).address,
+                    local_fixpoint_iterations, merged);
             if ((inserted || merged) && queued.at(successor) == 0u) {
                 queued.at(successor) = 1u;
                 pending.push_back(successor);
@@ -17608,8 +18312,6 @@ FunctionEvaluation evaluate_function(
             returned_memory_saved_stack_alias_latent;
         std::map<std::uint32_t, AbstractValue>
             returned_memory_inventory_payloads;
-        std::map<std::uint32_t, InventoryCandidateCarrier>
-            returned_memory_epoch_may_carriers;
         const auto memory_inventory_may_payload =
             [](const AbstractValue& source) {
                 const auto carrier = inventory_carrier_of(source);
@@ -17747,23 +18449,6 @@ FunctionEvaluation evaluate_function(
                     merge_memory_inventory_may_payload(
                         stored->second, value);
             }
-            for (const auto& [address, value] : state.memory_values) {
-                if (!memory_cell_was_written(address) ||
-                    !has_saved_stack_epoch(value))
-                    continue;
-                InventoryCandidateCarrier carrier;
-                absorb_inventory_saved_stack_epoch_candidate_carrier(
-                    carrier, value.inventory_saved_stack_epoch);
-                if (!has_inventory_candidate_carrier_payload(carrier) &&
-                    !has_pending_abi_scalar_payload(carrier))
-                    continue;
-                const auto [stored, inserted] =
-                    returned_memory_epoch_may_carriers.try_emplace(
-                        address, std::move(carrier));
-                if (!inserted)
-                    static_cast<void>(merge_inventory_candidate_carrier(
-                        stored->second, carrier));
-            }
         }
         auto first_return = returns.begin();
         auto returned_memory =
@@ -17800,16 +18485,27 @@ FunctionEvaluation evaluate_function(
                 merge_memory_inventory_may_payload(
                     stored->second, value);
         }
-        for (const auto& [address, carrier] :
-             returned_memory_epoch_may_carriers) {
-            if (returned_memory.contains(address))
-                continue;
-            // The cell did not survive the all-return intersection.  Keep
-            // Candidate and Pending lanes in the Memory domain without
-            // reconstructing value-scoped SavedEpoch provenance.
-            static_cast<void>(merge_inventory_candidate_carrier(
-                evaluation.summary.inventory_unresolved_memory_carrier,
-                carrier));
+        for (const auto& [return_site, state] : returns) {
+            static_cast<void>(return_site);
+            for (const auto& [address, value] : state.memory_values) {
+                if (!memory_cell_was_written(address) || !has_saved_stack_epoch(value))
+                    continue;
+                const auto retained = returned_memory.find(address);
+                if (retained != returned_memory.end() && has_saved_stack_epoch(retained->second))
+                    continue;
+                // A missing-return alternative removed this cell's exact
+                // provenance. Preserve its full SavedEpoch at domain scope;
+                // the Pending values still belong to that saved stack, not
+                // to an arbitrary Memory-load result. A restored Candidate-
+                // only cell above must not hide the original epoch here.
+                merge_inventory_saved_stack_epoch_summary(
+                    evaluation.summary.inventory_unresolved_memory_epoch,
+                    value.inventory_saved_stack_epoch, true);
+                absorb_inventory_saved_stack_epoch_candidate_carrier(
+                    evaluation.summary.inventory_unresolved_memory_carrier,
+                    value.inventory_saved_stack_epoch,
+                    InventoryCarrierProjection::CandidateLanes);
+            }
         }
         for (auto& [address, value] : returned_memory) {
             if (evaluation.summary.memory_values.size() >=
@@ -22943,6 +23639,8 @@ struct EvaluationProjectionInventoryLoss final {
     bool abi_stack_base_unresolved = false;
     bool detached_stack_callback_loss = false;
     bool memory_callback_loss = false;
+    const char* first_candidate_loss_domain = "none";
+    std::uint32_t first_candidate_loss_key = 0u;
 };
 
 [[nodiscard]] EvaluationProjectionInventoryLoss
@@ -22966,6 +23664,16 @@ inventory_loss_in_evaluation_projection(
     // stack-slot values dead for this root.
     EvaluationProjectionInventoryLoss loss;
     loss.candidate_values_truncated = false;
+    const auto observe_candidate_loss =
+        [&](const bool truncated, const char* const domain,
+            const std::uint32_t key = 0u) {
+            if (truncated && !loss.candidate_values_truncated) {
+                loss.first_candidate_loss_domain = domain;
+                loss.first_candidate_loss_key = key;
+            }
+            loss.candidate_values_truncated =
+                loss.candidate_values_truncated || truncated;
+        };
     loss.detached_stack_callback_loss =
         state.inventory_detached_stack_callback_loss;
     const auto observe_stack_value_loss =
@@ -23055,13 +23763,13 @@ inventory_loss_in_evaluation_projection(
             stack_epoch_truncated &&
             inventory_saved_stack_epoch_has_detached_root(
                 state.inventory_unresolved_stack_epoch);
-        loss.candidate_values_truncated =
-            loss.candidate_values_truncated ||
-            (state.inventory_callback_loss_identity_truncated_sources &
+        observe_candidate_loss(
+            !loss.candidate_values_truncated &&
+            ((state.inventory_callback_loss_identity_truncated_sources &
              unresolved_saved_stack_alias_source_stack) != 0u ||
             inventory_candidate_carrier_truncated(
                 state.inventory_unresolved_stack_carrier) ||
-            stack_epoch_truncated;
+            stack_epoch_truncated), "stack-domain");
         loss.abi_stack_base_unresolved =
             loss.abi_stack_base_unresolved || stack_epoch_current;
         loss.detached_stack_callback_loss =
@@ -23069,15 +23777,15 @@ inventory_loss_in_evaluation_projection(
             (stack_epoch_truncated && !stack_epoch_current);
     }
     if (memory_carrier_observable) {
-        loss.candidate_values_truncated =
-            loss.candidate_values_truncated ||
-            (state.inventory_callback_loss_identity_truncated_sources &
+        observe_candidate_loss(
+            !loss.candidate_values_truncated &&
+            ((state.inventory_callback_loss_identity_truncated_sources &
              unresolved_saved_stack_alias_source_memory) != 0u ||
             state.inventory_unresolved_memory_callback_loss ||
             inventory_candidate_carrier_truncated(
                 state.inventory_unresolved_memory_carrier) ||
             inventory_saved_stack_epoch_truncated(
-                state.inventory_unresolved_memory_epoch);
+                state.inventory_unresolved_memory_epoch)), "memory-domain");
         loss.memory_callback_loss =
             state.inventory_unresolved_memory_callback_loss ||
             (state.inventory_callback_loss_identity_truncated_sources &
@@ -23101,10 +23809,10 @@ inventory_loss_in_evaluation_projection(
                    (effective_register_read_mask & bit) == 0u) {
             continue;
         }
-        loss.candidate_values_truncated =
-            loss.candidate_values_truncated ||
-            inventory_candidate_values_truncated(
-                state.registers[index]);
+        observe_candidate_loss(
+            !loss.candidate_values_truncated && inventory_candidate_values_truncated(
+                state.registers[index]), "register",
+            static_cast<std::uint32_t>(index));
         // With an exact Inventory provenance contract, every live source bit
         // already proves a path to an Inventory or state sink.  The legacy
         // r4-r7 mask only describes the older ordinary ABI fallback.
@@ -23123,9 +23831,9 @@ inventory_loss_in_evaluation_projection(
                                 slot))
             continue;
         if (!stack_inventory_provenance_live) continue;
-        loss.candidate_values_truncated =
-            loss.candidate_values_truncated ||
-            inventory_candidate_values_truncated(value);
+        observe_candidate_loss(!loss.candidate_values_truncated &&
+                               inventory_candidate_values_truncated(value),
+                               "stack-cell", static_cast<std::uint32_t>(slot));
         observe_stack_value_loss(value);
     }
     if (state.stack_tail.present && stack_inventory_provenance_live) {
@@ -23139,10 +23847,10 @@ inventory_loss_in_evaluation_projection(
                            !state.stack_values.contains(slot);
                 });
         if (tail_is_observable) {
-            loss.candidate_values_truncated =
-                loss.candidate_values_truncated ||
-                inventory_candidate_values_truncated(
-                    state.stack_tail.payload);
+            observe_candidate_loss(
+                !loss.candidate_values_truncated && inventory_candidate_values_truncated(
+                    state.stack_tail.payload), "stack-tail",
+                static_cast<std::uint32_t>(state.stack_tail.lower_bound));
             observe_stack_value_loss(state.stack_tail.payload);
         }
     }
@@ -23152,15 +23860,35 @@ inventory_loss_in_evaluation_projection(
             !memory_cell_required_by_contract(
                 stored.first, memory_read_ranges))
             continue;
-        loss.candidate_values_truncated =
-            loss.candidate_values_truncated ||
-            inventory_candidate_values_truncated(stored.second);
+        observe_candidate_loss(
+            !loss.candidate_values_truncated &&
+            inventory_candidate_values_truncated(stored.second),
+            "memory-cell", stored.first);
         // Exact cells retain the value's current/detached origin.  Only a
         // lost or widened Memory coordinate contributes to the separate
         // Memory-loss channel above.
         observe_stack_value_loss(stored.second);
     }
     return loss;
+}
+
+void emit_projection_candidate_loss(
+    const char* const phase, const std::uint32_t owner,
+    const std::uint32_t site, const std::uint32_t target,
+    const EvaluationProjectionInventoryLoss& loss) {
+    if (!loss.candidate_values_truncated) return;
+    emit_bounded_analyzer_diagnostic(17u, owner, site, target, 0u, [&] {
+        std::fprintf(stderr,
+            "KATANA_ANALYZER_PROJECTION_LOSS phase=%s owner=0x%08X "
+            "site=0x%08X target=0x%08X domain=%s key=0x%08X "
+            "stack=%u detached=%u memory=%u\n",
+            phase, static_cast<unsigned>(owner), static_cast<unsigned>(site),
+            static_cast<unsigned>(target), loss.first_candidate_loss_domain,
+            static_cast<unsigned>(loss.first_candidate_loss_key),
+            static_cast<unsigned>(loss.abi_stack_base_unresolved),
+            static_cast<unsigned>(loss.detached_stack_callback_loss),
+            static_cast<unsigned>(loss.memory_callback_loss));
+    });
 }
 
 [[nodiscard]] FunctionEvaluationProjection
@@ -26811,6 +27539,953 @@ class MultiRootEvaluationCoordinator final {
 };
 
 } // namespace
+
+detail::StackTailJoinLawProbe
+detail::probe_stack_tail_join_laws_for_testing() {
+    StackTailJoinLawProbe probe;
+    const auto observe = [&](const AbstractState& before,
+                             const AbstractState& after,
+                             const bool reported) {
+        ++probe.joins_checked;
+        if (reported != (before != after))
+            ++probe.inaccurate_change_notifications;
+    };
+    for (const auto policy : {
+             StackTailFoldPendingScalarPolicy::PreserveBeforeAbiBoundary,
+             StackTailFoldPendingScalarPolicy::OmitAfterAbiBoundary}) {
+        for (const bool may_merge : {false, true}) {
+            for (const bool summarized_source : {false, true}) {
+                for (unsigned kind = 0u; kind < 12u; ++kind) {
+                    AbstractValue value;
+                    switch (kind) {
+                    case 1u:
+                        value.known = true;
+                        value.values = {0x80u};
+                        break;
+                    case 2u:
+                        value.pending_abi_scalar_values = {0x84u};
+                        break;
+                    case 3u:
+                        value.known = true;
+                        value.values = {0x80u};
+                        value.pending_abi_scalar_values = {0x84u};
+                        break;
+                    case 4u:
+                        value.inventory_code_pointer = true;
+                        value.inventory_code_pointer_values = {0x88u};
+                        break;
+                    case 5u:
+                        value.inventory_pc_relative_code_literal = true;
+                        value.inventory_pc_relative_code_literal_values =
+                            {0x8Cu};
+                        break;
+                    case 6u:
+                    case 7u:
+                        value.inventory_saved_stack_epoch.present = true;
+                        value.inventory_saved_stack_epoch.tracks_current_epoch =
+                            kind == 7u;
+                        break;
+                    case 8u:
+                        value.inventory_saved_stack_epoch.present = true;
+                        value.inventory_saved_stack_epoch
+                            .unresolved_candidate_carrier
+                            .inventory_code_pointer_values = {0x90u};
+                        break;
+                    case 9u:
+                        value.pending_abi_scalar_values_truncated = true;
+                        break;
+                    case 10u:
+                        value.inventory_stack_callback_loss_unresolved = true;
+                        break;
+                    case 11u:
+                        value.known = true;
+                        value.values = {0x80u};
+                        value.call_sites.insert(0x20u);
+                        value.callees.insert(0x40u);
+                        break;
+                    default:
+                        break;
+                    }
+                    AbstractState destination;
+                    destination.stack_tail.present = true;
+                    destination.stack_tail.lower_bound = 64;
+                    normalize_stack_tail_payload(destination.stack_tail.payload);
+                    AbstractState source;
+                    if (summarized_source) {
+                        source.stack_tail.present = true;
+                        source.stack_tail.lower_bound = 32;
+                        source.stack_tail.payload = value;
+                        normalize_stack_tail_payload(source.stack_tail.payload);
+                    } else {
+                        source.stack_values.emplace(68, value);
+                    }
+                    bool changed = false;
+                    for (unsigned round = 0u; round < 4u; ++round) {
+                        const auto before = destination;
+                        changed = merge_state(
+                            destination, source, may_merge, policy);
+                        observe(before, destination, changed);
+                    }
+                    if (changed) ++probe.unconverged_joins;
+                }
+            }
+        }
+        AbstractState widening;
+        AbstractValue scalar;
+        scalar.known = true;
+        scalar.values = {0x80u};
+        for (std::size_t slot = 0u;
+             slot < maximum_abi_persistent_flow_stack_slots + 2u; ++slot)
+            widening.stack_values.emplace(
+                static_cast<std::int32_t>(slot * 4u), scalar);
+        for (unsigned round = 0u; round < 2u; ++round) {
+            const auto before = widening;
+            const bool changed = normalize_stack_tail_summary(
+                widening, true, policy);
+            observe(before, widening, changed);
+            if (round != 0u && changed) ++probe.unconverged_joins;
+        }
+    }
+    InventoryCandidateCarrier carrier;
+    carrier.pending_abi_scalar_values = {0x80u};
+    AbstractValue mixed_scalar;
+    mixed_scalar.known = true;
+    mixed_scalar.values = {0x80u};
+    mixed_scalar.pending_abi_scalar_values = {0x84u};
+    probe.pending_scalar_change_reported =
+        absorb_pending_abi_scalar(carrier, mixed_scalar);
+    probe.pending_scalar_union_preserved =
+        carrier.pending_abi_scalar_values ==
+            std::vector<std::uint32_t>{0x80u, 0x84u} &&
+        !absorb_pending_abi_scalar(carrier, mixed_scalar);
+    return probe;
+}
+
+detail::InventoryStackStoreDomainProbe
+detail::probe_inventory_stack_store_domains_for_testing() {
+    InventoryStackStoreDomainProbe probe;
+    const katana::io::ExecutableImage image;
+    // Normal, predecrement, displacement and R0-indexed long stores.
+    for (const auto opcode : {0x2412u, 0x2416u, 0x1411u, 0x0416u}) {
+        const std::array<std::uint8_t, 2u> bytes{
+            static_cast<std::uint8_t>(opcode),
+            static_cast<std::uint8_t>(opcode >> 8u)};
+        const auto line = katana::sh4::disassemble(bytes, 0x100u).front();
+        const bool indexed = opcode == 0x0416u;
+        for (unsigned direction = 0u; direction < (indexed ? 2u : 1u); ++direction) {
+        for (unsigned domain = 0u; domain < (indexed ? 8u : 5u); ++domain) {
+            AbstractState state;
+            const auto base = static_cast<std::uint8_t>(direction == 0u ? 4u : 0u);
+            const auto displacement = static_cast<std::uint8_t>(direction == 0u ? 0u : 4u);
+            set_value(state[displacement], 4u);
+            state.stack_may_alias[displacement] = false;
+            state.inventory_stack_may_alias[displacement] = false;
+            state[base].inventory_stack_derived = domain != 4u;
+            if (domain == 0u) state.inventory_stack_offsets[base] = 0;
+            if (domain == 1u || domain == 3u || domain == 5u || domain == 6u)
+                state.inventory_stack_offset_candidates[base] = {0, 4};
+            if (domain == 3u) {
+                state[base].inventory_saved_stack_epoch.present = true;
+                state[base].inventory_saved_stack_epoch.tracks_current_epoch = false;
+            }
+            if (domain == 5u) state[displacement].complete = false;
+            if (domain == 6u) make_unknown(state[displacement]);
+            if (domain == 7u)
+                state.inventory_stack_offsets[base] = maximum_stack_distance;
+            set_value(state[1u], 0x80u);
+            state[1u].inventory_code_pointer = true;
+            state[1u].inventory_code_pointer_values = {0x80u};
+            state[1u].pending_abi_scalar_values = {0x84u};
+            set_value(state.memory_values[0x2000u], 0x1234u);
+            apply_transfer(state, line, image, true);
+            ++probe.cases_checked;
+            const auto& memory = state.inventory_unresolved_memory_carrier;
+            const bool memory_received_payload =
+                std::binary_search(memory.inventory_code_pointer_values.begin(),
+                                   memory.inventory_code_pointer_values.end(), 0x80u) ||
+                std::binary_search(memory.pending_abi_scalar_values.begin(),
+                                   memory.pending_abi_scalar_values.end(), 0x84u);
+            const bool exclusively_current_stack = domain < 2u;
+            if (memory_received_payload == exclusively_current_stack)
+                ++probe.wrong_domain_publications;
+            if (domain != 4u &&
+                state.inventory_unresolved_stack_carrier
+                    .inventory_code_pointer_values.empty())
+                ++probe.lost_stack_payloads;
+            const auto previous_cell = state.memory_values.find(0x2000u);
+            if (!state.memory_write_unknown ||
+                (previous_cell != state.memory_values.end() &&
+                 previous_cell->second.known))
+                ++probe.unsound_ordinary_memory_effects;
+        }
+        }
+    }
+    return probe;
+}
+
+detail::ComparedBranchProbe detail::probe_compared_branches_for_testing() {
+    ComparedBranchProbe probe;
+    const auto check = [&](const bool passed) {
+        ++probe.cases_checked;
+        if (passed) return;
+        ++probe.failures;
+        if (probe.first_failure == 0u) probe.first_failure = probe.cases_checked;
+    };
+    const auto bytes_for = [](const std::vector<std::uint16_t>& opcodes) {
+        std::vector<std::uint8_t> bytes;
+        for (const auto opcode : opcodes) {
+            bytes.push_back(static_cast<std::uint8_t>(opcode));
+            bytes.push_back(static_cast<std::uint8_t>(opcode >> 8u));
+        }
+        return bytes;
+    };
+    const auto block_for = [&](const std::vector<std::uint16_t>& opcodes) {
+        BasicBlock block;
+        block.lines = katana::sh4::disassemble(bytes_for(opcodes), 0x1000u);
+        return block;
+    };
+    const std::vector<std::uint32_t> inputs{
+        0u, 1u, 2u, 0x7FFFFFFFu, 0x80000000u, 0xFFFFFFFFu};
+    struct Rule { std::uint16_t opcode; std::vector<std::uint32_t> true_values; };
+    const std::vector<Rule> rules{
+        {0x3450u, {1u}}, // cmp/eq r5,r4
+        {0x8801u, {1u}}, // cmp/eq #1,r0
+        {0x88FFu, {0xFFFFFFFFu}}, // sign-extended immediate
+        {0x3452u, {1u, 2u, 0x7FFFFFFFu, 0x80000000u, 0xFFFFFFFFu}},
+        {0x3453u, {1u, 2u, 0x7FFFFFFFu}},
+        {0x3456u, {2u, 0x7FFFFFFFu, 0x80000000u, 0xFFFFFFFFu}},
+        {0x3457u, {2u, 0x7FFFFFFFu}},
+        {0x4411u, {0u, 1u, 2u, 0x7FFFFFFFu}}, // cmp/pz r4
+        {0x4415u, {1u, 2u, 0x7FFFFFFFu}}, // cmp/pl r4
+        {0xC801u, {0u, 2u, 0x80000000u}}, // tst #1,r0
+        {0x2458u, {0u, 2u, 0x80000000u}}, // tst r5,r4
+    };
+    for (const auto& rule : rules) {
+        for (const auto branch : {0x8902u, 0x8B02u, 0x8D02u, 0x8F02u}) {
+            const bool delayed = (branch & 0x0400u) != 0u;
+            std::vector<std::uint16_t> opcodes{rule.opcode, static_cast<std::uint16_t>(branch)};
+            if (delayed) opcodes.push_back(0x0009u);
+            const auto predicate = compared_branch_predicate(block_for(opcodes));
+            for (const bool target : {false, true}) {
+                AbstractState state;
+                set_value(state[5u], 1u);
+                if (!predicate) { check(false); continue; }
+                auto& value = state[predicate->left_register];
+                value.known = value.complete = true;
+                value.values = inputs;
+                value.pending_abi_scalar_values = inputs;
+                value.inventory_pc_relative_code_literal_values = inputs;
+                value.inventory_pc_relative_code_literal = true;
+                // Normalized source evidence is deliberately not a raw CMP
+                // operand; preserve it on both reachable edge views.
+                value.inventory_code_pointer_values = {0x80BDC464u};
+                value.inventory_code_pointer = true;
+                state.inventory_unresolved_stack_carrier.pending_abi_scalar_values_truncated = true;
+                const auto before = state;
+                auto expected = rule.true_values;
+                const bool true_edge = target == ((branch & 0x0200u) == 0u);
+                if (!true_edge) {
+                    expected.clear();
+                    std::set_difference(inputs.begin(), inputs.end(),
+                        rule.true_values.begin(), rule.true_values.end(), std::back_inserter(expected));
+                }
+                bool passed;
+                {
+                    const ComparedBranchSuccessorScope scope{state, predicate,
+                        target ? predicate->target : predicate->fallthrough};
+                    const auto& filtered = state[predicate->left_register];
+                    passed = scope.feasible() && filtered.values == expected &&
+                        filtered.pending_abi_scalar_values == expected &&
+                        filtered.inventory_pc_relative_code_literal_values == expected &&
+                        filtered.inventory_code_pointer_values == std::vector<std::uint32_t>{0x80BDC464u} &&
+                        state.inventory_unresolved_stack_carrier == before.inventory_unresolved_stack_carrier;
+                }
+                check(passed && state == before);
+            }
+        }
+    }
+    // Unsupported T producers, intervening instructions, non-store active slots,
+    // a merged target/fallthrough and symbolic R15 remain entirely unrefined.
+    for (const auto& opcodes : std::vector<std::vector<std::uint16_t>>{
+            {0x0009u, 0x8902u}, {0x3450u, 0x0009u, 0x8902u},
+            {0x3450u, 0x8D02u, 0x7401u}, {0x3450u, 0x8D02u, 0x0018u},
+            {0x3450u, 0x89FFu}, {0x3450u, 0x8D00u, 0x0009u},
+            {0x3F50u, 0x8902u}, {0x3450u, 0x8D02u, 0xFFFFu}})
+        check(!compared_branch_predicate(block_for(opcodes)).has_value());
+    const auto predicate = compared_branch_predicate(block_for({0x3450u, 0x8902u}));
+    // A partner which is incomplete, guarded, or unknown cannot constrain a
+    // Pending-only value. Top and nested epochs survive numeric predicates.
+    for (unsigned variant = 0u; variant < 4u; ++variant) {
+        AbstractState state;
+        set_value(state[5u], 1u);
+        if (variant == 0u) state[5u].complete = false;
+        if (variant == 1u) state[5u].guarded = true;
+        if (variant == 2u) make_unknown(state[5u]);
+        if (variant < 3u) state[4u].pending_abi_scalar_values = inputs;
+        else {
+            state[4u].pending_abi_scalar_values_truncated = true;
+            state[4u].inventory_code_pointer_values_truncated = true;
+            state[4u].inventory_pc_relative_code_literal_values_truncated = true;
+            state[4u].inventory_saved_stack_epoch.present = true;
+            state[4u].inventory_saved_stack_epoch.tracks_current_epoch = true;
+        }
+        const auto before = state;
+        bool passed;
+        {
+            const ComparedBranchSuccessorScope scope{state, predicate, predicate->target};
+            passed = scope.feasible() && state == before;
+        }
+        check(passed && state == before);
+    }
+    // A real physical/P1-to-source code alias remains positive evidence when
+    // the architectural EQ succeeds. A proven-false edge is never merged.
+    for (const bool target : {false, true}) {
+        AbstractState state;
+        set_value(state[4u], 0x0CB8A464u);
+        set_value(state[5u], 0x0CB8A464u);
+        state[4u].inventory_code_pointer = true;
+        state[4u].inventory_code_pointer_values = {0x80BDC464u};
+        const auto before = state;
+        bool passed;
+        {
+            const ComparedBranchSuccessorScope scope{state, predicate,
+                target ? predicate->target : predicate->fallthrough};
+            passed = scope.feasible() == target &&
+                state[4u].inventory_code_pointer_values == std::vector<std::uint32_t>{0x80BDC464u};
+        }
+        check(passed && state == before);
+    }
+    // Real SH4 count-to-four loops exercise evaluation-plan wiring and both
+    // non-delayed and NOP-delayed backward branches, including the final RTS.
+    for (const bool delayed : {false, true}) {
+        std::vector<std::uint16_t> opcodes{0xE000u, 0xE104u, 0x7001u, 0x3013u,
+            static_cast<std::uint16_t>(delayed ? 0x8FFCu : 0x8BFCu)};
+        if (delayed) opcodes.push_back(0x0009u);
+        opcodes.insert(opcodes.end(), {0x000Bu, 0x0009u});
+        const auto bytes = bytes_for(opcodes);
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.add_segment({".compared-branch-loop", 0x1000u, 0x1000u, bytes.size(),
+            katana::io::SegmentKind::Mixed, {true, false, true}, bytes});
+        const auto lines = katana::sh4::disassemble(bytes, 0x1000u);
+        const auto blocks = build_basic_blocks(lines);
+        BasicBlockIndexView::Map block_map;
+        FunctionInfo function;
+        function.entry_address = 0x1000u;
+        for (const auto& block : blocks) {
+            block_map.emplace(block.start_address, &block);
+            function.block_addresses.push_back(block.start_address);
+        }
+        const IndirectCalleeIndexView::FlatMap indirect;
+        AbstractState initial;
+        initial.stack_offsets[15u] = 0;
+        initial.inventory_stack_offsets[15u] = 0;
+        GuardedCodeInventoryWalkDiagnostics diagnostics;
+        const auto result = evaluate_function(image, function,
+            BasicBlockIndexView{block_map}, IndirectCalleeIndexView{indirect}, {}, {},
+            initial, ResolutionCollectionMode::None, false, nullptr, nullptr, nullptr,
+            nullptr, &diagnostics);
+        probe.maximum_loop_iterations = std::max(probe.maximum_loop_iterations,
+            diagnostics.maximum_local_fixpoint_iterations);
+        const auto returned = std::find_if(result.summary.registers.begin(), result.summary.registers.end(),
+            [](const auto& reg) { return reg.register_index == 0u; });
+        check(!result.local_fixpoint_budget_exhausted &&
+            returned != result.summary.registers.end() && returned->complete &&
+            returned->values == std::vector<std::uint32_t>{4u} &&
+            diagnostics.maximum_local_fixpoint_iterations <= 16u);
+    }
+    const auto evaluate_delay_store = [&](const std::vector<std::uint16_t>& opcodes,
+        const AbstractState& initial, const bool preserve_inventory,
+        GuardedCodeInventoryCollector* collector = nullptr,
+        const std::set<std::uint32_t>* isolated = nullptr) {
+        auto bytes = bytes_for(opcodes);
+        const auto code_size = bytes.size();
+        bytes.resize(0x88u, 0u);
+        for (const auto offset : {0x80u, 0x84u}) {
+            bytes[offset] = 0x0Bu; bytes[offset + 2u] = 0x09u;
+        }
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.add_segment({".compared-delay-store", 0x1000u, 0x1000u, bytes.size(),
+            katana::io::SegmentKind::Mixed, {true, true, true}, bytes});
+        const auto lines = katana::sh4::disassemble(
+            std::span<const std::uint8_t>{bytes}.first(code_size), 0x1000u);
+        const auto blocks = build_basic_blocks(lines);
+        BasicBlockIndexView::Map block_map;
+        FunctionInfo function;
+        function.entry_address = 0x1000u;
+        for (const auto& block : blocks) {
+            block_map.emplace(block.start_address, &block);
+            function.block_addresses.push_back(block.start_address);
+        }
+        const IndirectCalleeIndexView::FlatMap indirect;
+        GuardedCodeInventoryWalkDiagnostics diagnostics;
+        auto result = evaluate_function(image, function,
+            BasicBlockIndexView{block_map}, IndirectCalleeIndexView{indirect}, {}, {},
+            initial, ResolutionCollectionMode::None, preserve_inventory, collector,
+            isolated, nullptr, nullptr, &diagnostics);
+        probe.maximum_loop_iterations = std::max(probe.maximum_loop_iterations,
+            diagnostics.maximum_local_fixpoint_iterations);
+        return result;
+    };
+    const auto returned_values = [](const FunctionEvaluation& evaluation) {
+        const auto returned = std::find_if(evaluation.summary.registers.begin(),
+            evaluation.summary.registers.end(),
+            [](const auto& reg) { return reg.register_index == 0u; });
+        return returned != evaluation.summary.registers.end() && returned->complete
+            ? returned->values : std::vector<std::uint32_t>{};
+    };
+    // The Chao Race counter lives on the stack. Refining only r2 after its
+    // delay-slot spill lets the next iteration reload the unbounded value.
+    for (const bool preserve_inventory : {false, true}) {
+        AbstractState initial;
+        initial.stack_offsets[15u] = initial.inventory_stack_offsets[15u] = 0;
+        const auto result = evaluate_delay_store({
+            0xE300u, 0xE108u, 0x2F32u, // counter=0, bound=8, spill
+            0x62F2u, 0x7201u, 0x3213u, 0x8FFBu, 0x2F22u,
+            0x60F2u, 0x000Bu, 0x0009u}, initial, preserve_inventory);
+        check(!result.local_fixpoint_budget_exhausted &&
+            returned_values(result) == std::vector<std::uint32_t>{8u} &&
+            probe.maximum_loop_iterations <= 40u);
+    }
+    // Both feasible edges must retain their own stored value. The other edge
+    // adds ten after reloading, exposing an unfiltered/shared write in r0.
+    for (const bool when_true : {false, true}) {
+        for (const auto destination : {15u, 6u, 7u}) {
+            AbstractState initial;
+            initial.stack_offsets[15u] = initial.inventory_stack_offsets[15u] = 0;
+            initial.stack_offsets[6u] = initial.inventory_stack_offsets[6u] = -4;
+            set_value(initial[7u], 0x2000u);
+            set_value(initial[5u], 1u);
+            set_value(initial[4u], 0u); initial[4u].values.push_back(1u);
+            const auto load = static_cast<std::uint16_t>(0x6002u | destination << 4u);
+            const auto store = static_cast<std::uint16_t>(0x2042u | destination << 8u);
+            const auto result = evaluate_delay_store({
+                0x3450u, static_cast<std::uint16_t>(when_true ? 0x8D03u : 0x8F03u),
+                store, load, 0x000Bu, 0x0009u, load, 0x700Au, 0x000Bu, 0x0009u},
+                initial, true);
+            check(returned_values(result) == (when_true
+                ? std::vector<std::uint32_t>{0u, 11u}
+                : std::vector<std::uint32_t>{1u, 10u}));
+        }
+    }
+    // An absent or external successor must keep the original common transfer;
+    // the new plan is not allowed to suppress a side effect on that edge.
+    for (const bool omit_target : {false, true}) {
+        auto lines = katana::sh4::disassemble(bytes_for({
+            0x3450u, 0x8F03u, 0x2F42u, 0x000Bu, 0x0009u, 0x0009u,
+            0x000Bu, 0x0009u}), 0x1000u);
+        const auto blocks = build_basic_blocks(lines);
+        BasicBlockIndexView::Map block_map;
+        FunctionInfo function;
+        function.entry_address = 0x1000u;
+        for (const auto& block : blocks) {
+            block_map.emplace(block.start_address, &block);
+            if (block.start_address != (omit_target ? 0x100Cu : 0x1006u))
+                function.block_addresses.push_back(block.start_address);
+        }
+        const auto plan = build_function_evaluation_plan(function, BasicBlockIndexView{block_map});
+        check(!plan.blocks[plan.entry_index].branch_predicate &&
+            plan.blocks[plan.entry_index].deferred_delay_store == nullptr);
+    }
+    // Observers from both edges share the latest physical-block observation;
+    // isolated store evidence remains guarded and bound to its call site.
+    for (const bool isolated : {false, true}) {
+        AbstractState initial;
+        set_value(initial[7u], 0x2000u);
+        set_value(initial[4u], 0x1080u); initial[4u].values.push_back(0x1084u);
+        initial[4u].inventory_code_pointer = true;
+        initial[4u].inventory_code_pointer_values = {0x1080u, 0x1084u};
+        set_value(initial[5u], 0x1080u);
+        GuardedCodeInventoryCollector collector{true};
+        const std::set<std::uint32_t> call_sites{0x9000u};
+        const auto result = evaluate_delay_store({
+            0x3450u, 0x8F03u, 0x2742u, 0x000Bu, 0x0009u, 0x0009u,
+            0x000Bu, 0x0009u}, initial, true, &collector,
+            isolated ? &call_sites : nullptr);
+        std::vector<std::uint32_t> targets;
+        bool evidence_preserved = true;
+        collector.visit_persistent_deferred_snapshot(
+            [&](const auto& candidate, const bool) {
+                targets.push_back(candidate.target_address);
+                evidence_preserved = evidence_preserved &&
+                    (!isolated || (!candidate.complete && candidate.guarded &&
+                        candidate.evidence_call_sites == std::vector<std::uint32_t>{0x9000u}));
+            }, [](const auto&) {});
+        check(!result.local_fixpoint_budget_exhausted && evidence_preserved &&
+            targets == std::vector<std::uint32_t>{0x1080u, 0x1084u});
+    }
+    return probe;
+}
+
+detail::EpochPendingDomainProbe detail::probe_epoch_pending_domains_for_testing() {
+    EpochPendingDomainProbe probe;
+    std::vector<std::uint8_t> bytes(0x90u, 0u);
+    const auto put = [&](const std::size_t offset, const std::uint16_t opcode) {
+        bytes[offset] = static_cast<std::uint8_t>(opcode);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(opcode >> 8u);
+    };
+    for (std::size_t offset = 0u; offset < bytes.size(); offset += 2u) put(offset, 0x0009u);
+    for (const auto offset : {0x80u, 0x84u, 0x88u, 0x8Cu}) put(offset, 0x000Bu);
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".epoch-pending-domains", 0x1000u, 0x1000u, bytes.size(),
+                       katana::io::SegmentKind::Mixed, {true, false, true}, bytes});
+    const auto instruction = [](const std::uint16_t opcode) {
+        const std::array<std::uint8_t, 2u> raw{
+            static_cast<std::uint8_t>(opcode), static_cast<std::uint8_t>(opcode >> 8u)};
+        return katana::sh4::disassemble(raw, 0x1000u).front();
+    };
+    const auto check = [&](const bool domain_ok, const bool payload_ok, const bool restore_ok) {
+        ++probe.cases_checked;
+        if (!domain_ok) ++probe.wrong_domain_exposures;
+        if (!payload_ok) ++probe.lost_payloads;
+        if (!restore_ok) ++probe.incorrect_restore_provenance;
+        if ((!domain_ok || !payload_ok || !restore_ok) && probe.first_failure == 0u)
+            probe.first_failure = probe.cases_checked;
+    };
+    const auto pending = [](const bool top) {
+        InventoryCandidateCarrier carrier;
+        carrier.pending_abi_scalar_values_truncated = top;
+        if (!top) carrier.pending_abi_scalar_values = {0x1088u};
+        return carrier;
+    };
+    const auto epoch_with = [](const InventoryCandidateCarrier& carrier) {
+        InventorySavedStackEpoch epoch;
+        epoch.present = true;
+        epoch.slots.push_back({0, carrier, {}});
+        return epoch;
+    };
+    const auto pending_matches = [](const auto& value, const bool top) {
+        return value.pending_abi_scalar_values_truncated == top &&
+               value.pending_abi_scalar_values ==
+                   (top ? std::vector<std::uint32_t>{} : std::vector<std::uint32_t>{0x1088u});
+    };
+    const auto epoch_payload = [](const InventorySavedStackEpoch& epoch) {
+        InventoryCandidateCarrier carrier;
+        absorb_inventory_saved_stack_epoch_candidate_carrier(
+            carrier, epoch, InventoryCarrierProjection::AllLanes);
+        return carrier;
+    };
+    const auto abi_result = [&](const AbstractValue& value) {
+        AbstractState observation;
+        observation[4u] = value;
+        mark_observed_code_pointer_arguments(image, observation, 0x1000u, 0x1002u, 0x1080u);
+        return observation[4u];
+    };
+
+    // The AL_MAIN tree walker exposes these lanes through ordinary MOV.L
+    // loads before a BSR. Pending in the contents of a saved stack must not
+    // become Pending in the unrelated node/array pointer returned by a load.
+    for (const bool top : {false, true}) {
+        for (const bool nested : {false, true}) {
+            auto carrier = pending(top);
+            carrier.inventory_code_pointer_values = {0x1080u};
+            carrier.inventory_pc_relative_code_literal_values = {0x1084u};
+            carrier.contextual_candidate_dependency = true;
+            auto epoch = epoch_with(carrier);
+            if (nested) {
+                InventorySavedStackEpoch outer;
+                outer.present = true;
+                outer.unresolved_nested_epochs.push_back(epoch);
+                epoch = epoch_with({});
+                epoch.slots[0u].nested_epochs.push_back(std::move(outer));
+            }
+            for (unsigned domain = 0u; domain < 6u; ++domain) {
+                AbstractState state;
+                if (domain == 0u) {
+                    state.inventory_unresolved_memory_epoch = epoch;
+                    set_value(state[1u], 0x1040u);
+                } else if (domain == 1u || domain == 2u) {
+                    state.memory_values[0x2000u].inventory_saved_stack_epoch = epoch;
+                    if (domain == 2u) {
+                        state.memory_values[0x2004u].inventory_saved_stack_epoch = epoch;
+                        set_value(state[1u], 0x2000u);
+                        state[1u].values.push_back(0x2004u);
+                    }
+                } else if (domain == 3u) {
+                    state.inventory_unresolved_stack_epoch = epoch;
+                    state.stack_offsets[1u] = 0;
+                    set_value(state.stack_values[0], 0x12345677u);
+                } else if (domain == 4u) {
+                    state.stack_values[0].inventory_saved_stack_epoch = epoch;
+                    state.stack_values[4].inventory_saved_stack_epoch = epoch;
+                    state.inventory_stack_offset_candidates[1u] = {0, 4};
+                    state[1u].inventory_stack_derived = true;
+                } else {
+                    state.stack_tail.present = true;
+                    state.stack_tail.lower_bound = 0;
+                    state.stack_tail.payload.inventory_saved_stack_epoch = epoch;
+                    state.stack_offsets[1u] = 0;
+                }
+                apply_transfer(state, instruction(0x6412u), image, true);
+                const auto& value = state[4u];
+                const auto after_abi = abi_result(value);
+                const auto& retained_epoch = domain == 0u ? state.inventory_unresolved_memory_epoch
+                    : domain <= 2u ? state.memory_values.at(0x2000u).inventory_saved_stack_epoch
+                    : domain == 3u ? state.inventory_unresolved_stack_epoch
+                    : domain == 4u ? state.stack_values.at(0).inventory_saved_stack_epoch
+                    : state.stack_tail.payload.inventory_saved_stack_epoch;
+                check(!has_pending_abi_scalar_payload(value) &&
+                          !after_abi.inventory_code_pointer_values_truncated,
+                      // Known scalar loads retain only candidates which
+                      // match their values. Unknown MAY loads retain both
+                      // finite lanes; the original epoch retains all of them.
+                      value.inventory_code_pointer_values == (domain == 0u || domain == 3u
+                          ? std::vector<std::uint32_t>{} : std::vector<std::uint32_t>{0x1080u}) &&
+                          value.inventory_pc_relative_code_literal_values == (domain == 0u || domain == 3u
+                          ? std::vector<std::uint32_t>{} : std::vector<std::uint32_t>{0x1084u}) &&
+                          value.contextual_candidate_dependency && retained_epoch == epoch &&
+                          (domain != 0u || value.values == std::vector<std::uint32_t>{0x00090009u}) &&
+                          (domain != 3u || value.values == std::vector<std::uint32_t>{0x12345677u}),
+                      !has_saved_stack_epoch(value));
+            }
+        }
+        // Direct Memory/CurrentStack Pending is distinct from nested Epoch
+        // Pending and must survive both the load and its later ABI promotion.
+        for (const bool stack : {false, true}) {
+            AbstractState state;
+            if (stack) {
+                state.inventory_unresolved_stack_carrier = pending(top);
+                state.inventory_unresolved_stack_epoch = epoch_with(pending(true));
+                state.stack_offsets[1u] = 0;
+            } else {
+                state.inventory_unresolved_memory_carrier = pending(top);
+                state.inventory_unresolved_memory_epoch = epoch_with(pending(true));
+            }
+            apply_transfer(state, instruction(0x6412u), image, true);
+            const auto after_abi = abi_result(state[4u]);
+            check(pending_matches(state[4u], top),
+                  top ? after_abi.inventory_code_pointer_values_truncated
+                      : after_abi.inventory_code_pointer_values == std::vector<std::uint32_t>{0x1088u},
+                  !has_saved_stack_epoch(state[4u]));
+        }
+        // Both an exact epoch-address load and an unknown R0-indexed load
+        // dereference the saved stack itself. They legitimately read Pending.
+        for (const bool indexed : {false, true}) {
+            AbstractState state;
+            state[1u].inventory_saved_stack_epoch = epoch_with(pending(top));
+            apply_transfer(state, instruction(indexed ? 0x041Eu : 0x6412u), image, true);
+            const auto after_abi = abi_result(state[4u]);
+            check(pending_matches(state[4u], top),
+                  top ? after_abi.inventory_code_pointer_values_truncated
+                      : after_abi.inventory_code_pointer_values == std::vector<std::uint32_t>{0x1088u},
+                  true);
+        }
+        {
+            AbstractState state;
+            state[1u].inventory_saved_stack_epoch = epoch_with(pending(top));
+            apply_transfer(state, instruction(0x6F13u), image, true); // restore R15
+            apply_transfer(state, instruction(0x64F2u), image, true); // read restored slot
+            const auto after_abi = abi_result(state[4u]);
+            check(pending_matches(state[4u], top),
+                  top ? after_abi.inventory_code_pointer_values_truncated
+                      : after_abi.inventory_code_pointer_values == std::vector<std::uint32_t>{0x1088u},
+                  !state.inventory_unresolved_stack_callback_loss);
+        }
+
+        // Two real SH4 return paths: a missing exact cell must retain its
+        // original epoch at domain scope, even if direct Pending/Candidates
+        // cause a value-only MAY cell to be reinserted at the same address.
+        for (unsigned variant = 0u; variant < 4u; ++variant) {
+            put(0x00u, 0x2008u); // tst r0,r0 (unknown)
+            put(0x02u, 0x8902u); // bt 0x100A
+            put(0x04u, 0x2982u); // mov.l r8,@r9
+            put(0x06u, 0x000Bu); put(0x08u, 0x0009u);
+            put(0x0Au, variant == 1u ? 0x2982u : 0x0009u);
+            put(0x0Cu, 0x000Bu); put(0x0Eu, 0x0009u);
+            katana::io::ExecutableImage return_image;
+            return_image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+            return_image.add_segment({".epoch-pending-return", 0x1000u, 0x1000u, bytes.size(),
+                katana::io::SegmentKind::Mixed, {true, false, true}, bytes});
+            const auto lines = katana::sh4::disassemble(
+                std::span<const std::uint8_t>{bytes.data(), 0x10u}, 0x1000u);
+            const auto blocks = build_basic_blocks(lines);
+            BasicBlockIndexView::Map block_map;
+            FunctionInfo function;
+            function.entry_address = 0x1000u;
+            for (const auto& block : blocks) {
+                block_map.emplace(block.start_address, &block);
+                function.block_addresses.push_back(block.start_address);
+            }
+            const IndirectCalleeIndexView::FlatMap indirect;
+            AbstractState initial;
+            initial[8u].inventory_saved_stack_epoch = epoch_with(pending(top));
+            if (variant == 2u) initial[8u].pending_abi_scalar_values = {0x108Cu};
+            if (variant == 3u) initial[8u].inventory_code_pointer_values = {0x1080u};
+            set_value(initial[9u], 0x2000u);
+            initial.stack_may_alias[9u] = false;
+            initial.inventory_stack_may_alias[9u] = false;
+            const auto result = evaluate_function(return_image, function,
+                BasicBlockIndexView{block_map}, IndirectCalleeIndexView{indirect},
+                {}, {}, initial, ResolutionCollectionMode::None, true);
+            const auto& summary = result.summary;
+            const auto found = std::find_if(summary.memory_values.begin(), summary.memory_values.end(),
+                [](const auto& value) { return value.address == 0x2000u; });
+            const auto returned_epoch = restore_saved_stack_epoch(
+                variant == 1u && found != summary.memory_values.end()
+                    ? found->inventory_saved_stack_epoch : summary.inventory_unresolved_memory_epoch);
+            AbstractState caller;
+            caller.inventory_unresolved_memory_carrier = summary.inventory_unresolved_memory_carrier;
+            caller.inventory_unresolved_memory_epoch = restore_saved_stack_epoch(summary.inventory_unresolved_memory_epoch);
+            apply_transfer(caller, instruction(0x6412u), image, true);
+            check(!has_pending_abi_scalar_payload(caller[4u]) &&
+                      !summary.inventory_unresolved_memory_carrier.pending_abi_scalar_values_truncated,
+                  !result.local_fixpoint_budget_exhausted && pending_matches(epoch_payload(returned_epoch), top) &&
+                      (variant != 2u || (found != summary.memory_values.end() &&
+                          found->inventory_candidate_carrier.pending_abi_scalar_values == std::vector<std::uint32_t>{0x108Cu})),
+                  !summary.inventory_unresolved_memory_callback_loss &&
+                      (variant == 1u ? found != summary.memory_values.end() &&
+                          has_inventory_saved_stack_epoch_payload(returned_epoch)
+                        : found == summary.memory_values.end() ||
+                          !found->inventory_saved_stack_epoch.present));
+        }
+    }
+    // Candidate/Literal Top remains a real loss. Filtering nested Pending
+    // neither clears a destination's existing Pending nor imports evidence
+    // from a source containing no selected lane.
+    for (const bool literal : {false, true}) {
+        AbstractState state;
+        auto carrier = pending(true);
+        if (literal) carrier.inventory_pc_relative_code_literal_values_truncated = true;
+        else carrier.inventory_code_pointer_values_truncated = true;
+        state.inventory_unresolved_memory_epoch = epoch_with(carrier);
+        apply_transfer(state, instruction(0x6412u), image, true);
+        check(!has_pending_abi_scalar_payload(state[4u]),
+              abi_result(state[4u]).inventory_code_pointer_values_truncated, true);
+    }
+    for (const bool top : {false, true}) {
+        auto destination = pending(top);
+        auto source = pending(true);
+        source.call_sites = {0xDEADu};
+        source.callees = {0xBEEFu};
+        const bool changed = merge_inventory_candidate_carrier(
+            destination, source, InventoryCarrierProjection::CandidateLanes);
+        check(!changed && destination.call_sites.empty() && destination.callees.empty(),
+              pending_matches(destination, top), true);
+    }
+    return probe;
+}
+
+detail::PendingArithmeticProbe detail::probe_pending_arithmetic_for_testing() {
+    PendingArithmeticProbe probe;
+    using K = katana::sh4::InstructionKind;
+    constexpr std::array kinds{K::AddRegister, K::SubRegister, K::AndRegister,
+                               K::OrRegister, K::XorRegister};
+    const auto operation = [](const K kind, const std::uint32_t left,
+                              const std::uint32_t right) {
+        switch (kind) {
+        case K::AddRegister: return left + right;
+        case K::SubRegister: return left - right;
+        case K::AndRegister: return left & right;
+        case K::OrRegister: return left | right;
+        default: return left ^ right;
+        }
+    };
+    const auto scalar = [](std::vector<std::uint32_t> values) {
+        AbstractValue result;
+        result.known = true;
+        result.complete = true;
+        result.values = std::move(values);
+        return result;
+    };
+    const auto check_finite = [&](const AbstractValue& value,
+                                  const std::set<std::uint32_t>& expected) {
+        ++probe.cases_checked;
+        if (value.pending_abi_scalar_values_truncated ||
+            value.pending_abi_scalar_values !=
+                std::vector<std::uint32_t>(expected.begin(), expected.end()))
+            ++probe.incorrect_finite_sets;
+    };
+    const auto check_top = [&](const AbstractValue& value) {
+        ++probe.cases_checked;
+        if (!value.pending_abi_scalar_values_truncated ||
+            !value.pending_abi_scalar_values.empty())
+            ++probe.lost_required_top;
+    };
+    std::vector<std::uint32_t> overlapping;
+    for (std::uint32_t index = 0u; index <= 512u; ++index)
+        overlapping.push_back(index * 4u);
+    const std::array<std::pair<std::vector<std::uint32_t>, std::vector<std::uint32_t>>, 4u>
+        finite_cases{{{{0u, 1u}, {0u, 1u}}, {{0u, 1u}, {1u}},
+                      {{0u, 0xFFFFFFFEu, 0xFFFFFFFFu}, {0u, 1u, 2u}},
+                      {overlapping, {4u, 8u}}}};
+    for (const auto kind : kinds) {
+        for (const auto& [pending, ordinary] : finite_cases) {
+            auto left = scalar({0u});
+            left.pending_abi_scalar_values = pending;
+            const auto right = scalar(ordinary);
+            std::set<std::uint32_t> expected;
+            for (const auto a : pending)
+                for (const auto b : ordinary) expected.insert(operation(kind, a, b));
+            apply_binary(left, right, kind);
+            check_finite(left, expected);
+        }
+        auto left = scalar({0u});
+        auto right = scalar({0u});
+        for (std::uint32_t index = 0u; index <= 32u; ++index) {
+            left.pending_abi_scalar_values.push_back(index);
+            right.pending_abi_scalar_values.push_back(index);
+        }
+        std::set<std::uint32_t> expected;
+        for (const auto a : left.pending_abi_scalar_values) {
+            expected.insert(operation(kind, a, 0u));
+            expected.insert(operation(kind, 0u, a));
+            for (const auto b : right.pending_abi_scalar_values)
+                expected.insert(operation(kind, a, b));
+        }
+        apply_binary(left, right, kind);
+        check_finite(left, expected);
+        for (unsigned variant = 0u; variant < 4u; ++variant) {
+            auto a = scalar({0u});
+            auto b = scalar({0u});
+            a.pending_abi_scalar_values = {8u};
+            if (variant == 0u) { b.known = false; b.values.clear(); }
+            if (variant == 1u) b.complete = false;
+            if (variant == 2u) a.pending_abi_scalar_values_truncated = true;
+            if (variant == 3u) b.pending_abi_scalar_values_truncated = true;
+            apply_binary(a, b, kind);
+            check_top(a);
+        }
+    }
+    std::vector<std::uint32_t> full_bound;
+    for (std::uint32_t index = 0u; index < maximum_guarded_code_inventory; ++index)
+        full_bound.push_back(index);
+    auto overflow = scalar({0u});
+    overflow.pending_abi_scalar_values = full_bound;
+    apply_binary(overflow, scalar({0u, 1024u}), K::AddRegister);
+    check_top(overflow);
+    auto exact_bound = scalar({0u});
+    exact_bound.pending_abi_scalar_values = full_bound;
+    apply_binary(exact_bound, scalar({0u, 1u}), K::XorRegister);
+    check_finite(exact_bound, {full_bound.begin(), full_bound.end()});
+
+    // Actual unknown-FPSCR SH4 FMOV instructions create the +/-4 and +/-8
+    // coordinate alternatives which previously counted 1026 pairs as Top.
+    const katana::io::ExecutableImage image;
+    for (const auto opcode : {0xF329u, 0xF23Bu}) {
+        const std::array<std::uint8_t, 2u> bytes{
+            static_cast<std::uint8_t>(opcode), static_cast<std::uint8_t>(opcode >> 8u)};
+        const auto line = katana::sh4::disassemble(bytes, 0x1000u).front();
+        AbstractState state{};
+        state[2u].pending_abi_scalar_values = overlapping;
+        std::set<std::uint32_t> expected;
+        for (const auto value : overlapping)
+            for (const std::int32_t delta : {4, 8})
+                expected.insert(value + static_cast<std::uint32_t>(
+                    opcode == 0xF329u ? delta : -delta));
+        apply_transfer(state, line, image, true);
+        check_finite(state[2u], expected);
+    }
+    for (unsigned variant = 0u; variant < 4u; ++variant) {
+        AbstractState state{};
+        state[2u].pending_abi_scalar_values = {0u};
+        std::vector<std::int32_t> deltas{4};
+        if (variant == 0u) deltas.clear();
+        if (variant == 1u) state[2u].pending_abi_scalar_values_truncated = true;
+        if (variant == 2u) {
+            state[2u].pending_abi_scalar_values = full_bound;
+            deltas = {0, 1024};
+        }
+        if (variant == 3u) {
+            state[2u].pending_abi_scalar_values = {0u, 0xFFFFFFFCu};
+            deltas = {4, 8};
+        }
+        branch_inventory_stack_position(state, 2u, deltas);
+        if (variant == 3u) check_finite(state[2u], {0u, 4u, 8u});
+        else check_top(state[2u]);
+    }
+    return probe;
+}
+
+detail::NestedFunctionValueBatchProbe
+detail::probe_nested_function_value_batches_for_testing() {
+    NestedFunctionValueBatchProbe probe;
+    for (const std::size_t workers : {1u, 4u}) {
+        AnalysisMemoryBudget memory{1024u};
+        ParallelWorkExecutor executor{workers, memory};
+        ParallelWorkActivity activity;
+        std::promise<void> release;
+        const auto gate = release.get_future().share();
+        std::vector<std::future<void>> done;
+        std::atomic_size_t deepest{0u}, completed{0u}, items{0u}, errors{0u};
+        std::atomic_bool activity_ok{true};
+        for (std::size_t root = 0u; root < 32u; ++root) {
+            auto completion = std::make_shared<std::promise<void>>();
+            done.push_back(completion->get_future());
+            AnalysisWorkDescriptor descriptor;
+            descriptor.priority = AnalysisWorkPriorityKind::SeedRelease;
+            executor.submit_once(descriptor, [&, root] {
+                gate.wait();
+                static thread_local std::size_t root_depth = 0u;
+                ++root_depth;
+                auto old_depth = deepest.load();
+                while (old_depth < root_depth &&
+                       !deepest.compare_exchange_weak(old_depth, root_depth)) {}
+                try {
+                    parallel_function_value_for(executor, {}, 8u, workers,
+                        &activity, [&](const std::size_t index) {
+                            parallel_function_value_for(executor, {}, 3u, workers,
+                                &activity, [&](const std::size_t) {
+                                    items.fetch_add(1u);
+                                    if (activity.active_worker_count() == 0u)
+                                        activity_ok = false;
+                                });
+                            if (root == 0u && (index == 1u || index == 5u))
+                                throw std::logic_error(std::to_string(index));
+                        });
+                } catch (const std::logic_error& error) {
+                    if (root == 0u && std::string_view(error.what()) == "1")
+                        errors.fetch_add(1u);
+                    else
+                        activity_ok = false;
+                } catch (...) {
+                    activity_ok = false;
+                }
+                --root_depth;
+                completed.fetch_add(1u);
+            }, [completion] { completion->set_value(); });
+        }
+        release.set_value();
+        for (auto& future : done) future.get();
+        probe.roots_completed += completed.load();
+        probe.items_completed += items.load();
+        probe.maximum_root_depth = std::max(probe.maximum_root_depth, deepest.load());
+        probe.deterministic_errors += errors.load();
+        if (!activity_ok.load() || activity.active_worker_count() != 0u)
+            ++probe.contract_failures;
+
+        std::promise<void> lease_done;
+        auto lease_ready = lease_done.get_future();
+        executor.submit_once({}, [&] {
+            AnalysisWorkDescriptor child;
+            child.transient_bytes = 512u;
+            parallel_function_value_for(executor, child, 2u, 1u, nullptr,
+                [&](const std::size_t) {
+                    if (memory.used() < 512u) ++probe.contract_failures;
+                });
+            unsigned rejected = 0u;
+            for (unsigned invalid = 0u; invalid < 5u; ++invalid) {
+                AnalysisWorkDescriptor bad;
+                if (invalid == 0u) bad.estimated_cost = 0u;
+                if (invalid == 1u) bad.quantum = 0u;
+                if (invalid == 2u) bad.quantum = maximum_analysis_work_quantum + 1u;
+                if (invalid == 3u) bad.priority = static_cast<AnalysisWorkPriorityKind>(255u);
+                try {
+                    parallel_function_value_for(executor, bad, 1u,
+                        invalid == 4u ? 0u : 1u, nullptr,
+                        [](const std::size_t) {});
+                } catch (const std::invalid_argument&) { ++rejected; }
+            }
+            if (rejected != 5u) ++probe.contract_failures;
+            parallel_function_value_for(executor, {}, 0u, 0u, nullptr,
+                [&](const std::size_t) { ++probe.contract_failures; });
+        }, [&] { lease_done.set_value(); });
+        lease_ready.get();
+        if (memory.used() != 0u) ++probe.contract_failures;
+    }
+    return probe;
+}
 
 detail::FunctionEvaluationCacheTelemetryProbe
 detail::probe_function_evaluation_cache_telemetry_for_testing() {
@@ -40344,7 +42019,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             fixpoint_work.priority =
                 AnalysisWorkPriorityKind::SeedRelease;
             fixpoint_work.quantum = 1u;
-            parallel_analysis_for(
+            parallel_function_value_for(
                 fixpoint_executor,
                 std::move(fixpoint_work),
                 batch.size(),
@@ -40529,6 +42204,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         publishable_observation.state,
                         publishable_observation.callee);
                 if (authoritative_storage_replay) {
+                    if (!owner_input.fixpoint_candidate_values_truncated)
+                        emit_projection_candidate_loss(
+                            "fixpoint-call", item.address,
+                            observation.call_site, observation.callee,
+                            observation_loss);
                     owner_input.fixpoint_candidate_values_truncated =
                         owner_input.fixpoint_candidate_values_truncated ||
                         observation_loss.candidate_values_truncated;
@@ -44042,6 +45722,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 const auto forwarded_loss =
                     inventory_loss_reaches_inventory_sink(
                         forwarded.state, forwarded.callee);
+                if (!function_result.walk_diagnostics
+                        .inventory_candidate_values_truncated)
+                    emit_projection_candidate_loss(
+                        "forwarded-call", function->entry_address,
+                        forwarded.call_site, forwarded.callee, forwarded_loss);
                 function_result.walk_diagnostics
                     .inventory_candidate_values_truncated =
                     function_result.walk_diagnostics
@@ -44347,7 +46032,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         AnalysisWorkPriorityKind::CriticalPrefix;
                     forwarded_work.critical_prefix = function_index;
                     forwarded_work.quantum = 1u;
-                    parallel_analysis_for(
+                    parallel_function_value_for(
                         forwarded_executor,
                         std::move(forwarded_work),
                         batch.size(),
@@ -48572,7 +50257,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         AnalysisWorkPriorityKind::CriticalPrefix;
                     contextual_work.critical_prefix = function_index;
                     contextual_work.quantum = 1u;
-                    parallel_analysis_for(
+                    parallel_function_value_for(
                         contextual_executor,
                         std::move(contextual_work),
                         semantic_groups.size(),
@@ -50631,7 +52316,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     AnalysisWorkPriorityKind::CriticalPrefix;
                 harvest_work.critical_prefix = function_index;
                 harvest_work.quantum = 1u;
-                parallel_analysis_for(
+                parallel_function_value_for(
                     contextual_executor,
                     std::move(harvest_work),
                     stable_results.size(),
@@ -50871,7 +52556,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     AnalysisWorkPriorityKind::CriticalPrefix;
                 isolated_work.critical_prefix = function_index;
                 isolated_work.quantum = 1u;
-                parallel_analysis_for(
+                parallel_function_value_for(
                     global_analysis_executor(),
                     std::move(isolated_work),
                     isolated_results.size(),
@@ -51250,7 +52935,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     AnalysisWorkPriorityKind::CriticalPrefix;
                 partition_work.critical_prefix = function_index;
                 partition_work.quantum = 1u;
-                parallel_analysis_for(
+                parallel_function_value_for(
                     partition_executor,
                     std::move(partition_work),
                     batch.size(),

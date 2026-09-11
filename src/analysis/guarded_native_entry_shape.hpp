@@ -269,21 +269,29 @@ class GuardedNativeEntryShapeCache {
 
     [[nodiscard]] GuardedNativeEntryShapeStatus
     validate(const std::uint32_t entry_address) {
-        std::deque<std::uint32_t> pending{entry_address};
+        // Recursive CFA follows local direct callees as soon as a speculative
+        // entry is published. Its shape proof must cover those callees too,
+        // or branch-looking data can introduce an invalid decode indirectly.
+        struct WorkItem {
+            std::uint32_t address;
+            std::uint32_t function_entry;
+        };
+        std::deque<WorkItem> pending{{entry_address, entry_address}};
         std::unordered_set<std::uint32_t> visited;
         visited.reserve(maximum_instructions);
-        std::size_t candidate_work = 0u;
+        std::unordered_map<std::uint32_t, std::size_t> function_work;
         const auto enqueue_fallthrough =
-            [&pending](const std::uint32_t address, const bool has_delay_slot) {
+            [&pending](const std::uint32_t address, const bool has_delay_slot,
+                       const std::uint32_t function_entry) {
                 const auto distance = has_delay_slot ? 4u : 2u;
                 if (address > std::numeric_limits<std::uint32_t>::max() - distance)
                     return false;
-                pending.push_back(address + distance);
+                pending.push_back({address + distance, function_entry});
                 return true;
             };
 
         while (!pending.empty()) {
-            const auto address = pending.front();
+            const auto [address, function_entry] = pending.front();
             pending.pop_front();
             if (!visited.insert(address).second) continue;
             if (address != entry_address) {
@@ -296,6 +304,7 @@ class GuardedNativeEntryShapeCache {
                 }
             }
 
+            auto& candidate_work = function_work[function_entry];
             const auto decoded = decode_at(address, candidate_work);
             if (!decoded.instruction.has_value()) return decoded.status;
             const auto& instruction = *decoded.instruction;
@@ -310,23 +319,36 @@ class GuardedNativeEntryShapeCache {
 
             switch (instruction.control_flow) {
             case katana::sh4::ControlFlowKind::None:
-                if (!enqueue_fallthrough(address, instruction.has_delay_slot))
+                if (!enqueue_fallthrough(address, instruction.has_delay_slot, function_entry))
                     return GuardedNativeEntryShapeStatus::OutsideImage;
                 break;
             case katana::sh4::ControlFlowKind::ConditionalBranch: {
                 const auto target =
                     katana::sh4::calculate_direct_branch_target(instruction, address);
                 if (!target.has_value() ||
-                    !enqueue_fallthrough(address, instruction.has_delay_slot))
+                    !enqueue_fallthrough(address, instruction.has_delay_slot, function_entry))
                     return GuardedNativeEntryShapeStatus::StructurallyInvalid;
-                pending.push_back(*target);
+                pending.push_back({*target, function_entry});
                 break;
             }
-            case katana::sh4::ControlFlowKind::Call:
+            case katana::sh4::ControlFlowKind::Call: {
+                const auto target =
+                    katana::sh4::calculate_direct_branch_target(instruction, address);
+                if (!target.has_value())
+                    return GuardedNativeEntryShapeStatus::StructurallyInvalid;
+                const auto local = validate_decode_candidate(*image_, *target);
+                if (local.valid())
+                    pending.push_back({local.resolved_address, local.resolved_address});
+                // Out-of-image callees keep their independent binding. Each
+                // local callee gets its own 4K body limit; the existing total
+                // work limit bounds the whole walk, including recursive SCCs.
+                if (!enqueue_fallthrough(address, instruction.has_delay_slot, function_entry))
+                    return GuardedNativeEntryShapeStatus::OutsideImage;
+                break;
+            }
             case katana::sh4::ControlFlowKind::IndirectCall:
-                // A candidate entry owns its local continuation, not the
-                // independently validated native entry of a callee.
-                if (!enqueue_fallthrough(address, instruction.has_delay_slot))
+                // Dynamic destinations are not inferred by a shape proof.
+                if (!enqueue_fallthrough(address, instruction.has_delay_slot, function_entry))
                     return GuardedNativeEntryShapeStatus::OutsideImage;
                 break;
             case katana::sh4::ControlFlowKind::UnconditionalBranch: {
@@ -334,7 +356,7 @@ class GuardedNativeEntryShapeCache {
                     katana::sh4::calculate_direct_branch_target(instruction, address);
                 if (!target.has_value())
                     return GuardedNativeEntryShapeStatus::StructurallyInvalid;
-                pending.push_back(*target);
+                pending.push_back({*target, function_entry});
                 break;
             }
             case katana::sh4::ControlFlowKind::Return:
@@ -597,6 +619,66 @@ struct FunctionEvaluationCacheTelemetryProbe final {
 // without exposing the private evaluation artifact type to tests.
 [[nodiscard]] FunctionEvaluationCacheTelemetryProbe
 probe_function_evaluation_cache_telemetry_for_testing();
+
+// Internal algebraic regression probe; the private abstract state never
+// escapes into the public analyzer API or the product input contracts.
+struct StackTailJoinLawProbe final {
+    std::size_t joins_checked = 0u;
+    std::size_t inaccurate_change_notifications = 0u;
+    std::size_t unconverged_joins = 0u;
+    bool pending_scalar_change_reported = false;
+    bool pending_scalar_union_preserved = false;
+};
+
+[[nodiscard]] StackTailJoinLawProbe probe_stack_tail_join_laws_for_testing();
+
+struct InventoryStackStoreDomainProbe final {
+    std::size_t cases_checked = 0u;
+    std::size_t wrong_domain_publications = 0u;
+    std::size_t lost_stack_payloads = 0u;
+    std::size_t unsound_ordinary_memory_effects = 0u;
+};
+
+[[nodiscard]] InventoryStackStoreDomainProbe
+probe_inventory_stack_store_domains_for_testing();
+
+struct NestedFunctionValueBatchProbe final {
+    std::size_t roots_completed = 0u;
+    std::size_t items_completed = 0u;
+    std::size_t maximum_root_depth = 0u;
+    std::size_t deterministic_errors = 0u;
+    std::size_t contract_failures = 0u;
+};
+
+[[nodiscard]] NestedFunctionValueBatchProbe
+probe_nested_function_value_batches_for_testing();
+
+struct PendingArithmeticProbe final {
+    std::size_t cases_checked = 0u;
+    std::size_t incorrect_finite_sets = 0u;
+    std::size_t lost_required_top = 0u;
+};
+
+[[nodiscard]] PendingArithmeticProbe probe_pending_arithmetic_for_testing();
+
+struct EpochPendingDomainProbe final {
+    std::size_t cases_checked = 0u;
+    std::size_t wrong_domain_exposures = 0u;
+    std::size_t lost_payloads = 0u;
+    std::size_t incorrect_restore_provenance = 0u;
+    std::size_t first_failure = 0u;
+};
+
+[[nodiscard]] EpochPendingDomainProbe probe_epoch_pending_domains_for_testing();
+
+struct ComparedBranchProbe final {
+    std::size_t cases_checked = 0u;
+    std::size_t failures = 0u;
+    std::size_t first_failure = 0u;
+    std::size_t maximum_loop_iterations = 0u;
+};
+
+[[nodiscard]] ComparedBranchProbe probe_compared_branches_for_testing();
 
 // Narrow fault-observation hook for the parallel resolution lifetime
 // regressions. Product sessions leave every callback empty.

@@ -7,6 +7,58 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 ## Aktuelle Nutzeranordnung zum Sonic-Export (10. September 2026)
 
+- R354/0.49.9 ist am 11. September exportiert und statisch abgenommen:
+  alle 249 Modulidentitaeten/Quellbindungen und alle bisherigen Codebytes
+  erhalten; 731833 Moduleinstiege (vorher 724624). Die 120 verlorenen echten
+  Einstiege sind wiederhergestellt, nur zwei belegte falsche Interior-Roots
+  entfallen. Die drei neuen Save-Hooks ersetzen 52 alte Interior-Einstiege;
+  ihre genaue Required/ReplacesOriginal-Funktion und Quellbytes sind geprueft.
+  Linkaudit bestanden. Erfolgreicher Exportkern 2240844 ms, ganzer Wrapper
+  2258549 ms (37:39); 1025 AOT-Dateien in diesem Versuch kompiliert. Der
+  Analyzer-ABI-Rebuild und die vorherigen Fehlversuche sind kein Kaltwert
+  und kein Erfolg des Zehn-Minuten-Ziels. Kein eigener Spielstart. Jetzt
+  SA2-Baselinevergleich ebenfalls beendet: Bootextraktion erfolgreich,
+  Hardware-/Kontrollflusspruefung nach180/900 Sekunden am Messlimit,
+  nativer Modulaudit am65536-Kontextbudget abgewiesen. Keine SA1-Adressen
+  verwendet, keine abgeschlossene SA2-Funktionszahl oder Portfreigabe.
+  Keine weitere Analyzer-/SA2-Schleife. Jetzt lokaler Commit ohne Push.
+
+- Neuer Nutzerbatch vom 11. September: alle fuenf offenen Meldungen gemeinsam
+  behandeln: Chao Race, Twinkle Circuit, separate Chao-Speicherung, falscher
+  Aktivzustand von Monitoren/Schaltern und SEGA-Logonaehte. Die konkreten
+  Chao-Reparaturen sind damit wieder beauftragt; keine neue Vollinventur.
+  Quellbatch r354: 31 Chao- und ein Twinkle-Root, drei weitere Save-SDK-
+  Bindungen samt echter Ergebnisprojektion, SDK638-Materialkorrektur und
+  Flycast-konforme Randkorrektur fuer passende hochskalierte UI-Quads.
+  Gezielte Komponenten-/Persistenzpruefungen und Manifestvalidierung bestehen.
+  Auf anschliessendes Nutzer-"ok go" ist R354 zum Export freigegeben. Kein
+  eigener Spielstart; R353 bleibt bis zur Produktabnahme die Referenz.
+  Danach folgt der angeordnete erste SA2-Erkennungsvergleich im separaten
+  privaten Ordner `private/ports/SA2`, ohne SA1-Adresslisten zu uebernehmen.
+  Gameplay/Visuals im neuen Produkt bleiben bis zum Nutzerlauf offen.
+  Der separat abgeschlossene Analyzerbatch wird nicht wieder aufgenommen.
+  Die R354-Integration fand zusaetzlich acht verlorene, im R353-Produkt
+  belegte Roots in ADV00, MINICART, SUMMARY und STG01. Diese werden privat
+  byte-/sourcegebunden erhalten (globaler Seed316); zwei alte falsche
+  Interior-Einstiege +0x380 in STG05/STG08 entfallen mit separatem Byte- und
+  Ownernachweis. Alle bisher kompilierten Codebytes muessen erhalten bleiben.
+  Analyzer-ABI80 veraendert derzeit auch den von AOT-Dateien eingebundenen
+  ABI-Header: der reale Ninjaplan verlangt deshalb1157 AOT-Compiles. Das ist
+  ein belegter Abhaengigkeitsmangel, keine Behauptung eines inkrementellen
+  Exports. Erhaltene Objekte/Buildlogs werden nicht manipuliert.
+
+- Aktuelle Abschlussanordnung vom 11. September: Die Analyzerarbeit am
+  naechstmoeglichen funktionierenden Punkt beenden und den erreichten
+  Fortschritt berichten. Der begrenzte Batch endet mit gebauter CLI,
+  gepruefter automatischer Dateilade-Erkennung und dem aktuellen
+  Nicht-Chao-Familienvergleich. Danach keine weitere autonome
+  Erkennungsschleife; vollstaendige Adresslistenabloesung bleibt offen.
+
+- Aktuelle Priorisierung vom 11. September: Chao kommt ganz zum Schluss.
+  Seine Vollstaendigkeit ist unbestaetigt. Die generische Erkennung wird zuerst
+  gegen die durchgespielten Storypfade von R353 vorangetrieben; Chao-Luecken
+  bestimmen weder den kritischen Pfad noch den Vollstaendigkeitsmassstab.
+
 - Neuer autonomer Auftrag: R353 zuerst inkrementell bauen, dann als
   Vergleichsbasis fuer vollstaendige generische Erkennung nutzen. Nur Chao
   ist laut Nutzer noch ungeprueft. Bestehende Erkenntnisse und Spielstand

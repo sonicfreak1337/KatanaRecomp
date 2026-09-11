@@ -1024,6 +1024,8 @@ int audit_callback_contracts_manifest(const std::filesystem::path& path,
                       << " kind=" << (sink.call ? "call" : "jump")
                       << " receiver-argument-mask=0x" << std::hex
                       << static_cast<unsigned>(sink.receiver_argument_mask)
+                      << " base-argument-mask=0x"
+                      << static_cast<unsigned>(sink.base_argument_mask)
                       << std::dec << '\n';
         }
         std::cout << "Callback-Record-Tables: "
@@ -1044,7 +1046,9 @@ int audit_callback_contracts_manifest(const std::filesystem::path& path,
                       << " source-kind=" << static_cast<unsigned>(table.source_kind)
                       << " table-argument=" << static_cast<unsigned>(table.table_argument)
                       << " vector-address=0x" << std::hex << std::uppercase
-                      << table.vector_address << std::dec
+                      << table.vector_address
+                      << " resident-cell=0x" << table.resident_cell_address
+                      << " resident-target=0x" << table.resident_target_address << std::dec
                       << '\n';
         }
         return analysis.static_callback_contracts_materialized ? 0 : 2;
@@ -1075,6 +1079,16 @@ int audit_callback_contracts_manifest(const std::filesystem::path& path,
                   << ",\"argument_mask\":"
                   << static_cast<unsigned>(sink.argument_mask) << '}';
     }
+    std::cout << "],\"persistent_field_copies\":[";
+    for (std::size_t index = 0u; index < analysis.static_persistent_field_copies.size(); ++index) {
+        if (index != 0u) std::cout << ',';
+        const auto& copy = analysis.static_persistent_field_copies[index];
+        std::cout << "{\"function_address\":" << copy.function_address
+                  << ",\"load_instruction_address\":" << copy.load_instruction_address
+                  << ",\"store_instruction_address\":" << copy.store_instruction_address
+                  << ",\"displacement\":" << copy.displacement
+                  << ",\"argument\":" << +copy.argument << ",\"width\":" << +copy.width << '}';
+    }
     std::cout << "],\"callback_field_sinks\":[";
     for (std::size_t index = 0u;
          index < analysis.static_callback_field_sinks.size(); ++index) {
@@ -1090,6 +1104,8 @@ int audit_callback_contracts_manifest(const std::filesystem::path& path,
                   << ",\"call\":" << (sink.call ? "true" : "false")
                   << ",\"receiver_argument_mask\":"
                   << static_cast<unsigned>(sink.receiver_argument_mask)
+                  << ",\"base_argument_mask\":"
+                  << static_cast<unsigned>(sink.base_argument_mask)
                   << '}';
     }
     std::cout << "],\"callback_record_tables\":[";
@@ -1115,7 +1131,9 @@ int audit_callback_contracts_manifest(const std::filesystem::path& path,
                   << static_cast<unsigned>(table.width)
                   << ",\"source_kind\":" << static_cast<unsigned>(table.source_kind)
                   << ",\"table_argument\":" << static_cast<unsigned>(table.table_argument)
-                  << ",\"vector_address\":" << table.vector_address << '}';
+                  << ",\"vector_address\":" << table.vector_address
+                  << ",\"resident_cell_address\":" << table.resident_cell_address
+                  << ",\"resident_target_address\":" << table.resident_target_address << '}';
     }
     std::cout << "]}\n";
     return analysis.static_callback_contracts_materialized ? 0 : 2;
@@ -1188,14 +1206,15 @@ int audit_latent_aot_module_cli(
     const std::optional<std::uint32_t> runtime_base,
     const bool sega_prs,
     const bool strict,
+    const bool discover_entries,
     const bool json) {
     std::sort(entry_offsets.begin(), entry_offsets.end());
     entry_offsets.erase(
         std::unique(entry_offsets.begin(), entry_offsets.end()),
         entry_offsets.end());
-    if (entry_offsets.empty())
+    if (entry_offsets.empty() != discover_entries)
         throw std::invalid_argument(
-            "latent-aot-module-audit benoetigt mindestens einen --entry.");
+            "latent-aot-module-audit erwartet entweder --entry oder --discover-entries.");
     const auto bytes = load_latent_aot_module_audit_bytes(path);
     katana::codegen::LatentAotDiscoveryOptions options;
     options.mode = katana::codegen::LatentAotDiscoveryMode::ExactOnly;
@@ -1240,10 +1259,10 @@ int audit_latent_aot_module_cli(
               [](const auto& a, const auto& b) {
                   return std::tie(a.function_address, a.call_instruction_address,
                                   a.load_instruction_address, a.displacement,
-                                  a.width, a.call, a.receiver_argument_mask) <
+                                  a.width, a.call, a.receiver_argument_mask, a.base_argument_mask) <
                          std::tie(b.function_address, b.call_instruction_address,
                                   b.load_instruction_address, b.displacement,
-                                  b.width, b.call, b.receiver_argument_mask);
+                                  b.width, b.call, b.receiver_argument_mask, b.base_argument_mask);
               });
     external_callback_field_sinks.erase(
         std::unique(external_callback_field_sinks.begin(), external_callback_field_sinks.end()),
@@ -1261,7 +1280,12 @@ int audit_latent_aot_module_cli(
     if (!json)
         options.progress =
             katana::ProgressReporter(observe_structured_progress);
-    const auto audit = runtime_base.has_value()
+    const auto audit = discover_entries
+        ? katana::codegen::audit_latent_aot_module_discovery(bytes, source_address,
+            sega_prs ? katana::codegen::LatentAotSourceTransform::SegaPrs
+                     : katana::codegen::LatentAotSourceTransform::Identity,
+            runtime_base, options, strict)
+        : runtime_base.has_value()
                            ? (sega_prs
                                   ? katana::codegen::
                                         audit_latent_aot_sega_prs_module(
@@ -1322,6 +1346,7 @@ int audit_latent_aot_module_cli(
     }
 
     std::cout << "{\"schema\":\"katana.latent-aot-module-audit.v1\",";
+    std::cout << "\"entry_discovery\":" << (discover_entries ? "true" : "false") << ',';
     std::cout << "\"strict\":" << (strict ? "true" : "false") << ',';
     std::cout << "\"admitted\":"
               << (audit.admitted ? "true" : "false") << ',';
@@ -16291,9 +16316,9 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp disc-audit-set <Verzeichnis> [--json] [--jobs N] "
               "[--fail-on-gap|--strict]\n"
            << "  katana-recomp latent-aot-module-audit <Modul.bin> "
-              "--source-address <0xAdresse> --entry <0xOffset>... "
+              "--source-address <0xAdresse> (--entry <0xOffset>...|--discover-entries) "
               "[--external-callback-sink <0xAdresse>:<0xMaske>]... "
-              "[--external-callback-field-sink <function>:<call>:<load>:<displacement>:<width>:<is-call>:<receiver-mask>]... "
+              "[--external-callback-field-sink <function>:<call>:<load>:<displacement>:<width>:<is-call>:<receiver-mask>[:<base-mask>]]... "
               "[--external-code-target <address>]... "
               "[--external-sentinel-table <function>:<call>:<load>:<sink>:<stride>:<field>:<callback-arg>:<table-arg>]... "
               "[--runtime-base <0xAdresse>] [--sega-prs] [--strict] [--json]\n"
@@ -16730,7 +16755,7 @@ int main(const int argc, char* argv[]) {
             std::cout << "KatanaRecomp " << KATANA_RECOMP_VERSION << '\n';
             return exit_status(ExitCode::Success);
         }
-        if (argc >= 7 &&
+        if (argc >= 6 &&
             std::string_view(argv[1]) ==
                 "latent-aot-module-audit") {
             std::optional<std::uint32_t> source_address;
@@ -16747,6 +16772,7 @@ int main(const int argc, char* argv[]) {
                 external_literal_transfer_candidates;
             bool sega_prs = false;
             bool strict = false;
+            bool discover_entries = false;
             bool json = false;
             for (int index = 3; index < argc; ++index) {
                 const auto option = std::string_view(argv[index]);
@@ -16765,6 +16791,10 @@ int main(const int argc, char* argv[]) {
                         throw std::invalid_argument(
                             "latent-aot-module-audit erhielt --strict doppelt.");
                     strict = true;
+                } else if (option == "--discover-entries") {
+                    if (discover_entries)
+                        throw std::invalid_argument("Duplicate --discover-entries.");
+                    discover_entries = true;
                 } else if (option == "--source-address") {
                     if (source_address.has_value() || ++index >= argc)
                         throw std::invalid_argument(
@@ -16852,12 +16882,15 @@ int main(const int argc, char* argv[]) {
                     if (++index >= argc || external_callback_field_sinks.size() >= 4096u)
                         throw std::invalid_argument("Missing or excessive callback field sink.");
                     const std::string value(argv[index]);
-                    std::array<std::uint32_t, 7u> fields{};
+                    std::array<std::uint32_t, 8u> fields{};
+                    const auto field_count = 1u + static_cast<std::size_t>(std::count(value.begin(), value.end(), ':'));
+                    if (field_count != 7u && field_count != 8u)
+                        throw std::invalid_argument("Callback field sink requires seven or eight hexadecimal fields.");
                     std::size_t begin = 0u;
-                    for (std::size_t field = 0u; field < fields.size(); ++field) {
+                    for (std::size_t field = 0u; field < field_count; ++field) {
                         const auto end = value.find(':', begin);
-                        if ((field + 1u == fields.size()) != (end == std::string::npos))
-                            throw std::invalid_argument("Callback field sink requires exactly seven hexadecimal fields.");
+                        if ((field + 1u == field_count) != (end == std::string::npos))
+                            throw std::invalid_argument("Invalid callback field sink field count.");
                         fields[field] = parse_hex_value(
                             value.substr(begin, end == std::string::npos ? end : end - begin),
                             std::numeric_limits<std::uint32_t>::max(), "Callback field sink");
@@ -16866,11 +16899,11 @@ int main(const int argc, char* argv[]) {
                     if (fields[0] == 0u || fields[1] == 0u || fields[2] == 0u ||
                         ((fields[0] | fields[1] | fields[2]) & 1u) != 0u ||
                         fields[3] > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) ||
-                        fields[4] != 4u || fields[5] > 1u || fields[6] > 0xFu)
+                        fields[4] != 4u || fields[5] > 1u || fields[6] > 0xFu || fields[7] > 0xFu)
                         throw std::invalid_argument("Invalid callback field sink.");
                     external_callback_field_sinks.push_back({fields[0], fields[1], fields[2],
                         static_cast<std::int32_t>(fields[3]), static_cast<std::uint8_t>(fields[4]),
-                        fields[5] != 0u, static_cast<std::uint8_t>(fields[6])});
+                        fields[5] != 0u, static_cast<std::uint8_t>(fields[6]), static_cast<std::uint8_t>(fields[7])});
                 } else if (option == "--external-callback-sink") {
                     if (++index >= argc)
                         throw std::invalid_argument(
@@ -16918,6 +16951,7 @@ int main(const int argc, char* argv[]) {
                 runtime_base,
                 sega_prs,
                 strict,
+                discover_entries,
                 json);
         }
         if ((argc == 3 || argc == 4) &&

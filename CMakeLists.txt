@@ -3465,6 +3465,13 @@ add_executable(katana-control-flow-analysis-tests
     tests/analysis/control_flow_analysis_tests.cpp
 )
 
+add_executable(katana-staged-transform-analysis-tests
+    tests/analysis/staged_transform_analysis_tests.cpp
+)
+target_link_libraries(katana-staged-transform-analysis-tests PRIVATE katana_analyzer_sdk)
+katana_enable_warnings(katana-staged-transform-analysis-tests)
+add_test(NAME katana-staged-transform-analysis-tests COMMAND katana-staged-transform-analysis-tests)
+
 target_link_libraries(katana-control-flow-analysis-tests PRIVATE katana_core)
 katana_enable_warnings(katana-control-flow-analysis-tests)
 

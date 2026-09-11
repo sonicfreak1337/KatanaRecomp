@@ -14,6 +14,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 
 namespace {
@@ -107,12 +108,450 @@ template <typename Function> std::string failure(Function&& function) {
     return {};
 }
 
+void constant_indexed_field_callback_regressions() {
+    constexpr std::uint32_t base = 0x8C100000u;
+    for (unsigned variant = 0u; variant < 7u; ++variant) {
+        std::vector<std::uint8_t> bytes(0x140u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto pointer = [&](std::size_t at, std::uint32_t value) {
+            for (unsigned byte = 0u; byte < 4u; ++byte)
+                bytes[at + byte] = static_cast<std::uint8_t>(value >> (8u * byte));
+        };
+        word(0x00u, 0x4F22u); // sts.l pr,@-r15
+        word(0x02u, 0xD707u); // mov.l callback,r7
+        word(0x04u, 0xB01Cu); // bsr processor
+        word(0x06u, 0x0009u);
+        word(0x08u, 0x4F26u);
+        word(0x0Au, 0x000Bu);
+        word(0x0Cu, 0x0009u);
+        pointer(0x20u, base + 0x100u);
+        word(0x40u, 0x2FE6u); // preserve owner through the indirect call
+        word(0x42u, 0x4F22u);
+        word(0x44u, 0x6E43u); // r14 := incoming r4
+        word(0x46u, 0xE0B3u); // mov #-77,r0
+        word(0x48u, 0x600Cu); // extu.b r0,r0
+        word(0x4Au, 0x70F9u); // add #-7,r0 => field 172
+        word(0x4Cu, 0x2668u); // tst r6,r6 (unknown path selection)
+        word(0x4Eu, 0x8900u); // bt 0x52
+        word(0x50u, variant == 1u ? 0x6053u : 0x0009u); // unknown R0 on one path
+        if (variant >= 3u && variant <= 5u) {
+            word(0x4Cu, 0xD00Cu); // PC literal must never become an immediate origin
+            word(0x4Eu, 0x0009u);
+            pointer(0x80u, variant == 3u ? 0x8C880000u :
+                            variant == 4u ? 0x8C8800ACu : 171u);
+            word(0x50u, variant == 4u ? 0x600Du : // extu.w => 172
+                          variant == 5u ? 0x7001u : 0x0009u); // add #1 => 172
+        } else if (variant == 6u) {
+            // Both arms have the same complete scalar domain, but only one
+            // has an immediate origin. The provenance join must use AND.
+            word(0x50u, 0xD00Bu);
+            pointer(0x80u, 172u);
+        }
+        word(0x52u, 0x0E76u); // mov.l r7,@(r0,r14)
+        word(0x54u, variant == 2u ? 0x035Eu : 0x03EEu); // load from r5 or same owner
+        word(0x56u, 0x430Bu); // jsr @r3
+        word(0x58u, 0xE400u); // callback receives a slot/index, not the owner
+        word(0x5Au, 0x4F26u);
+        word(0x5Cu, 0x000Bu);
+        word(0x5Eu, 0x6EF6u);
+        word(0x100u, 0xE02Au);
+        word(0x102u, 0x000Bu);
+        word(0x104u, 0x0009u);
+        katana::io::ExecutableImage image;
+        image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(katana::io::InitialSnapshotPolicy::ImmutableOnly);
+        image.add_segment({".constant-indexed-field", base, 0u, bytes.size(),
+            katana::io::SegmentKind::Mixed, {true, true, true}, std::move(bytes)});
+        image.add_entry_point(base);
+        katana::analysis::ControlFlowAnalysisOptions options;
+        options.enable_function_value_analysis = false;
+        const auto result = katana::analysis::analyze_control_flow(image, nullptr, {}, options);
+        const auto sink = std::find_if(result.static_callback_sinks.begin(), result.static_callback_sinks.end(),
+            [](const auto& candidate) { return candidate.function_address == base + 0x40u; });
+        const bool callback_argument = sink != result.static_callback_sinks.end() && (sink->argument_mask & 8u) != 0u;
+        require(callback_argument == (variant == 0u),
+            "Fixed R0 field was lost or an unknown index/unrelated receiver/table bypassed its proof: " + std::to_string(variant));
+        if (variant == 0u)
+            require(find_function(result, base + 0x100u) != nullptr &&
+                    find_guarded_aot_entry(result, base + 0x100u) != nullptr,
+                "A fixed-field callback did not reach guarded native inventory");
+    }
+}
+
+void descriptor_base_argument_regressions() {
+    constexpr std::uint32_t base = 0x8C200000u;
+    for (unsigned variant = 0u; variant < 6u; ++variant) {
+        std::vector<std::uint8_t> bytes(0x40u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at+1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        word(0x00u, 0x2FD6u); word(0x02u, 0x4F22u);
+        word(0x04u, 0x6D53u); // exact incoming descriptor r5 -> r13
+        word(0x06u, variant == 1u ? 0x2FD6u : 0x0009u);
+        word(0x08u, variant == 1u ? 0x6DF6u : 0x0009u); // exact stack round trip
+        word(0x0Au, variant == 2u ? 0x6D52u : variant == 5u ? 0xDD09u : 0x0009u);
+        word(0x0Cu, variant == 3u ? 0x7D04u : 0x0009u); // changed pointer
+        word(0x0Eu, 0x2668u);
+        word(0x10u, 0x8900u);
+        word(0x12u, variant == 4u ? 0x6D63u : 0x0009u); // r5/r6 receiver join
+        word(0x14u, 0x53D2u); // descriptor+8 -> callback
+        word(0x16u, 0x430Bu);
+        word(0x18u, 0xE400u); // callback gets a different object/index
+        word(0x1Au, 0x4F26u); word(0x1Cu, 0x000Bu); word(0x1Eu, 0x6DF6u);
+        word(0x30u, 0x0000u); word(0x32u, 0x8C90u);
+        katana::io::ExecutableImage image;
+        image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(katana::io::InitialSnapshotPolicy::ImmutableOnly);
+        image.add_segment({".descriptor-consumer", base, 0u, bytes.size(),
+            katana::io::SegmentKind::Mixed, {true,true,true}, std::move(bytes)});
+        image.add_entry_point(base);
+        katana::analysis::ControlFlowAnalysisOptions options;
+        options.enable_function_value_analysis = false;
+        const auto result = katana::analysis::analyze_control_flow(image, nullptr, {}, options);
+        const auto field = std::find_if(result.static_callback_field_sinks.begin(), result.static_callback_field_sinks.end(),
+            [](const auto& sink) { return sink.function_address == base && sink.load_instruction_address == base+0x14u; });
+        const auto mask = field == result.static_callback_field_sinks.end() ? 0u : field->base_argument_mask;
+        require(mask == (variant < 2u ? 2u : 0u), "Descriptor base origin was lost or widened: " + std::to_string(variant));
+        if (variant < 2u)
+            require(field->receiver_argument_mask == 0u, "Descriptor argument was confused with callback argument");
+    }
+}
+
+void mixed_stack_static_callback_regressions() {
+    constexpr std::uint32_t base = 0x8C200000u;
+    for (unsigned variant = 0u; variant < 4u; ++variant) {
+        std::vector<std::uint8_t> bytes(0x80u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at+1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto pointer = [&](std::size_t at, std::uint32_t value) {
+            for (unsigned byte = 0u; byte < 4u; ++byte)
+                bytes[at+byte] = static_cast<std::uint8_t>(value >> (8u*byte));
+        };
+        word(0x00u, 0x2FD6u); word(0x02u, 0x4F22u);
+        word(0x04u, 0x0009u); word(0x06u, 0x0009u); word(0x08u, 0x0009u);
+        word(0x0Au, 0xDD09u); // one path has a static descriptor
+        word(0x0Cu, variant == 2u ? 0xE008u : 0x0009u);
+        word(0x0Eu, 0x2668u); word(0x10u, 0x8900u);
+        word(0x12u, 0x6DF3u); // the other path has SP; this is only a may fact
+        constexpr std::array<std::uint16_t, 4u> loads{0x63D2u,0x53D2u,0x03DEu,0x63D6u};
+        word(0x14u, loads[variant]);
+        word(0x16u, 0x6433u); // hand the loaded pointer to a known callback consumer
+        word(0x18u, 0xB022u); word(0x1Au, 0x0009u);
+        word(0x1Cu, 0x4F26u); word(0x1Eu, 0x000Bu); word(0x20u, 0x6DF6u);
+        pointer(0x30u, base + (variant == 1u || variant == 2u ? 0x34u : 0x3Cu));
+        pointer(0x3Cu, base+0x50u);
+        word(0x50u, 0xE02Au); word(0x52u, 0x000Bu); word(0x54u, 0x0009u);
+        word(0x60u, 0x4F22u); word(0x62u, 0x440Bu); word(0x64u, 0x0009u);
+        word(0x66u, 0x4F26u); word(0x68u, 0x000Bu); word(0x6Au, 0x0009u);
+        katana::io::ExecutableImage image;
+        image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(katana::io::InitialSnapshotPolicy::ImmutableOnly);
+        image.add_segment({".mixed-stack-static-callback",base,0u,bytes.size(),katana::io::SegmentKind::Mixed,{true,true,true},std::move(bytes)});
+        image.add_entry_point(base);
+        katana::analysis::ControlFlowAnalysisOptions options;
+        options.enable_function_value_analysis = false;
+        const auto result = katana::analysis::analyze_control_flow(image,nullptr,{},options);
+        require(find_function(result,base+0x50u) != nullptr,
+            "A may-stack alternative suppressed the positive static callback: " + std::to_string(variant));
+    }
+}
+
+void persistent_field_copy_regressions() {
+    // Primary descriptor registration copies +12/+16/+20 for later updates.
+    // An unchanged word needs stronger evidence than the positive origin union.
+    constexpr std::uint32_t base = 0x8C200000u;
+    for (unsigned variant = 0u; variant < 16u; ++variant) {
+        std::vector<std::uint8_t> bytes(0x80u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at+1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        for (std::size_t at = 0u; at < 0x30u; at += 2u) word(at, 0x0009u);
+        word(0x00u, 0x2FD6u); word(0x02u, 0x4F22u);
+        word(0x04u, variant == 10u ? 0x6D52u : 0x6D53u);
+        word(0x06u, variant == 6u ? 0x63D0u : 0x53D3u); // descriptor+12
+        if (variant == 1u) { word(8u, 0x6233u); word(10u, 0x6323u); }
+        if (variant == 2u) { word(8u, 0x2F36u); word(10u, 0x63F6u); }
+        if (variant == 3u) word(12u, 0x7301u);
+        if (variant == 4u) word(12u, 0x4300u);
+        if (variant == 5u) word(12u, 0x633Cu);
+        if (variant == 8u || variant == 9u || variant == 12u) {
+            word(0x1Eu, 0x2778u); word(0x20u, 0x8900u);
+            word(0x22u, variant == 8u ? 0x6373u : variant == 9u ? 0x53D4u : 0x66F3u);
+        }
+        if (variant == 11u) word(0x24u, 0x66F3u);
+        if (variant == 13u) {
+            word(8u, 0x2F36u); word(10u, 0x2F00u); word(12u, 0x63F6u);
+        }
+        if (variant == 14u) {
+            word(8u, 0x2F36u); word(10u, 0x62F3u); word(12u, 0x2778u);
+            word(14u, 0x8900u); word(16u, 0x6273u); word(18u, 0x2202u);
+            word(20u, 0x63F6u);
+        }
+        if (variant == 15u) {
+            word(8u, 0x2F36u); word(10u, 0x64F3u);
+            word(12u, 0xB028u); word(16u, 0x63F6u);
+            word(0x60u, 0xE000u); word(0x62u, 0x2402u);
+            word(0x64u, 0x000Bu); word(0x66u, 0x0009u);
+        }
+        word(0x26u, variant == 7u ? 0x2630u : 0x2632u);
+        word(0x28u, 0x4F26u); word(0x2Au, 0x000Bu); word(0x2Cu, 0x6DF6u);
+        katana::io::ExecutableImage image;
+        image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(katana::io::InitialSnapshotPolicy::ImmutableOnly);
+        image.add_segment({".field-copy", base, 0u, bytes.size(),
+            katana::io::SegmentKind::Mixed, {true,true,true}, std::move(bytes)});
+        image.add_entry_point(base);
+        katana::analysis::ControlFlowAnalysisOptions options;
+        options.enable_function_value_analysis = false;
+        const auto result = katana::analysis::analyze_control_flow(image, nullptr, {}, options);
+        const auto found = std::find_if(result.static_persistent_field_copies.begin(), result.static_persistent_field_copies.end(),
+            [&](const auto& copy) { return copy.function_address == base && copy.store_instruction_address == base+0x26u; });
+        require((found != result.static_persistent_field_copies.end()) == (variant <= 2u),
+            "Field copy bypassed unchanged-word/alias/call proof or lost a move/spill: " + std::to_string(variant));
+        if (variant <= 2u)
+            require(found->load_instruction_address == base+6u && found->argument == 1u &&
+                    found->displacement == 12 && found->width == 4u,
+                    "Field-copy source instruction, argument or width changed");
+    }
+}
+
+void persistent_pointer_identity_regressions() {
+    constexpr std::uint32_t base = 0x8C200000u;
+    for (unsigned variant = 0u; variant < 3u; ++variant) {
+        std::vector<std::uint8_t> bytes(0x60u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at+1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        word(0x00u, 0x4F22u);
+        word(0x02u, variant == 2u ? 0x6552u : 0x0009u); // wrapper forwards contents or pointer
+        word(0x04u, 0xB01Cu); word(0x06u, 0x0009u);
+        word(0x08u, 0x4F26u); word(0x0Au, 0x000Bu); word(0x0Cu, 0x0009u);
+        word(0x40u, variant == 1u ? 0x6352u : 0x6353u); // consumer persists contents or pointer
+        word(0x42u, 0x2432u); word(0x44u, 0x000Bu); word(0x46u, 0x0009u);
+        katana::io::ExecutableImage image;
+        image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(katana::io::InitialSnapshotPolicy::ImmutableOnly);
+        image.add_segment({".pointer-identity",base,0u,bytes.size(),katana::io::SegmentKind::Mixed,{true,true,true},std::move(bytes)});
+        image.add_entry_point(base);
+        katana::analysis::ControlFlowAnalysisOptions options;
+        options.enable_function_value_analysis = false;
+        const auto result = katana::analysis::analyze_control_flow(image,nullptr,{},options);
+        const auto mask = [&](std::uint32_t entry) {
+            const auto sink = std::find_if(result.static_persistent_pointer_sinks.begin(), result.static_persistent_pointer_sinks.end(),
+                [&](const auto& s) { return s.function_address == entry; });
+            return sink == result.static_persistent_pointer_sinks.end() ? 0u : sink->argument_mask;
+        };
+        require(mask(base+0x40u) == (variant == 1u ? 0u : 2u) && mask(base) == (variant == 0u ? 2u : 0u),
+            "Persisted pointer contract confused dereferenced contents with an argument: " + std::to_string(variant));
+    }
+}
+
 } // namespace
 
 #ifdef _MSC_VER
 #pragma warning(suppress : 6262) // Deliberately comprehensive analysis-regression driver.
 #endif
-int main() {
+void resident_callback_cell_regressions() {
+    // Sonic's primary task selector reads a sparse resident table and passes
+    // r6 to a proven callback factory. The destination module is not loaded.
+    constexpr std::uint32_t base = 0x8c200000u;
+    for (unsigned variant = 0u; variant < 12u; ++variant) {
+        std::vector<std::uint8_t> bytes(0x120u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at+1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto pointer = [&](std::size_t at, std::uint32_t value) {
+            for (unsigned i = 0u; i < 4u; ++i) bytes[at+i] = static_cast<std::uint8_t>(value >> (8u*i));
+        };
+        word(0u,0x4f22u); word(2u,0xd21fu); word(4u,0xd31fu);
+        word(6u,0x6031u); word(8u,0x4008u); // mutable word selector * 4
+        word(0xau,variant == 1u ? 0x0009u : 0x302cu);
+        word(0xcu,variant == 1u ? 0x062eu : variant == 6u ? 0x6502u :
+            variant == 9u ? 0x6606u : 0x6602u);
+        word(0xeu,variant == 2u ? 0x2f66u : variant == 10u ? 0x2448u : 0x0009u);
+        word(0x10u,variant == 2u ? 0x66f6u : variant == 10u ? 0x8900u : 0x0009u);
+        word(0x12u,variant == 3u ? 0x7601u : variant == 4u ? 0x6662u :
+            variant == 10u ? 0xe600u : 0x0009u);
+        word(0x14u,0xb014u); word(0x16u,variant == 5u ? 0xe600u : 0x0009u);
+        word(0x18u,0x4f26u); word(0x1au,0x000bu); word(0x1cu,0x0009u);
+        word(0x40u,0x4f22u); word(0x42u,0x460bu); word(0x44u,0x0009u);
+        word(0x46u,0x4f26u); word(0x48u,0x000bu); word(0x4au,0x0009u);
+        pointer(0x80u,variant == 8u ? 0xac200100u : base+0x100u);
+        pointer(0x84u,0x8c780000u);
+        pointer(0x100u,0x0c900020u); pointer(0x104u,0u);
+        pointer(0x108u,0xacb80040u); pointer(0x10cu,0x2010u);
+        pointer(0x110u,0x0c900030u); // beyond the non-address terminator
+        if (variant == 11u) {
+            // The load remains indexed, but +2 changes its raster phase.
+            word(0xau,0x7002u); word(0xcu,0x062eu);
+        }
+        katana::io::ExecutableImage image;
+        image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(katana::io::InitialSnapshotPolicy::ImmutableOnly);
+        katana::io::ImageSegment segment{".resident-callback-cells",base,0u,bytes.size(),
+            katana::io::SegmentKind::Mixed,{true,true,true},std::move(bytes)};
+        if (variant != 7u) {
+            segment.source_kind = katana::io::ImageSourceKind::RawBinary;
+            segment.local_source_name = "resident-callback-cells.bin";
+        }
+        image.add_segment(std::move(segment)); image.add_entry_point(base);
+        katana::analysis::ControlFlowAnalysisOptions options;
+        options.enable_function_value_analysis = false;
+        const auto result = katana::analysis::analyze_control_flow(image,nullptr,{},options);
+        std::vector<katana::analysis::StaticCallbackRecordTableContract> cells;
+        for (const auto& table : result.static_callback_record_tables)
+            if (table.source_kind == katana::analysis::CallbackRecordTableSource::ResidentCallbackCell)
+                cells.push_back(table);
+        const bool positive = variant == 0u || variant == 1u || variant == 2u || variant == 8u || variant == 9u;
+        require(cells.size() == (positive ? 2u : 0u),
+            "Resident callback-cell provenance regression: " + std::to_string(variant));
+        if (positive) {
+            require(cells[0].vector_address == base+0x100u && cells[1].resident_cell_address == base+0x108u &&
+                cells[1].resident_target_address == 0x8cb80040u && cells[1].callback_argument == 2u &&
+                cells[1].call_instruction_address == base+0x14u && cells[1].callback_sink_address == base+0x40u,
+                "Sparse resident cells lost their source/consumer binding");
+            require(find_function(result,0x8cb80040u) == nullptr,
+                "A foreign callback was promoted to a primary function");
+        }
+    }
+}
+
+void published_header_record_regressions() {
+    constexpr std::uint32_t base = 0x8c200000u;
+    for (unsigned variant = 0u; variant < 15u; ++variant) {
+        std::vector<std::uint8_t> bytes(0x700u, 0u);
+        const auto word = [&](std::size_t at, std::uint16_t value) {
+            bytes[at] = static_cast<std::uint8_t>(value);
+            bytes[at+1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto pointer = [&](std::size_t at, std::uint32_t value) {
+            for (unsigned i = 0u; i < 4u; ++i) bytes[at+i] = static_cast<std::uint8_t>(value >> (8u*i));
+        };
+        const auto literal = [&](std::size_t at, unsigned reg, std::size_t slot) {
+            word(at, static_cast<std::uint16_t>(0xd000u | (reg << 8u) |
+                ((slot - ((at + 4u) & ~3u)) / 4u)));
+        };
+        word(0u,0x4f22u); literal(2u,1u,0x100u); literal(4u,2u,0x104u);
+        literal(6u,3u,0x108u); word(8u,0x6420u);
+        word(0xau,variant == 2u ? 0x6643u : 0x6630u);
+        word(0xcu,0x4408u); word(0xeu,0x4408u); word(0x10u,0x4400u);
+        word(0x12u,0x4608u); word(0x14u,0x314cu);
+        word(0x16u,variant == 1u ? 0x0009u : 0x316cu);
+        word(0x18u,variant == 3u ? 0x7104u : 0x0009u);
+        word(0x1au,0x6012u); literal(0x1cu,1u,0x10cu); word(0x1eu,0x2102u);
+        word(0x20u,0x4f26u); word(0x22u,0x000bu); word(0x24u,0x0009u);
+        // Independent consumer: published header -> field -> index*20 -> callback.
+        word(0x40u,0x4f22u); literal(0x42u,3u,0x110u); word(0x44u,0x6932u);
+        word(0x46u,variant == 5u ? 0x5992u : 0x5991u);
+        literal(0x48u,10u,0x104u); word(0x4au,0x62a1u); word(0x4cu,0x622du);
+        literal(0x4eu,1u,0x114u); word(0x50u,0x2219u); word(0x52u,0x6023u);
+        word(0x54u,0x4208u); word(0x56u,0x320cu); word(0x58u,0x4208u);
+        word(0x5au,variant == 11u ? 0x7204u : variant == 12u ? 0x2219u :
+            variant == 13u ? 0xe900u : 0x0009u);
+        word(0x5cu,0x392cu);
+        word(0x5eu,variant == 6u ? 0x5593u : variant == 7u ? 0x5694u :
+            variant == 9u ? 0x5695u : 0x5693u);
+        word(0x60u,0xb01eu); word(0x62u,variant == 10u ? 0xe600u : 0x0009u);
+        word(0x64u,0x4f26u); word(0x66u,0x000bu); word(0x68u,0x0009u);
+        word(0xa0u,0x4f22u); word(0xa2u,0x460bu); word(0xa4u,0x0009u);
+        word(0xa6u,0x4f26u); word(0xa8u,0x000bu); word(0xaau,0x0009u);
+        pointer(0x100u,variant == 14u ? 0xac200200u : base+0x200u);
+        pointer(0x104u,0x8c780000u); pointer(0x108u,0x8c780004u);
+        pointer(0x10cu,variant == 4u ? 0x8c78000cu : 0x8c780008u);
+        pointer(0x110u,0x8c780008u); pointer(0x114u,0x7fffu);
+        pointer(0x200u,0x0c900080u); pointer(0x208u,0xac900090u);
+        // A second selector must not silently collapse to the first stride.
+        pointer(0x6c0u,0x0c9000a0u); pointer(0x6c4u,0x2010u);
+        pointer(0x6c8u,0x0c9000b0u);
+        katana::io::ExecutableImage image;
+        image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(katana::io::InitialSnapshotPolicy::ImmutableOnly);
+        katana::io::ImageSegment segment{".published-headers",base,0u,bytes.size(),
+            katana::io::SegmentKind::Mixed,{true,true,true},std::move(bytes)};
+        if (variant != 8u) {
+            segment.source_kind = katana::io::ImageSourceKind::RawBinary;
+            segment.local_source_name = "published-headers.bin";
+        }
+        image.add_segment(std::move(segment)); image.add_entry_point(base); image.add_entry_point(base+0x40u);
+        katana::analysis::ControlFlowAnalysisOptions options;
+        options.enable_function_value_analysis = false;
+        const auto result = katana::analysis::analyze_control_flow(image,nullptr,{},options);
+        std::vector<katana::analysis::StaticCallbackRecordTableContract> tables;
+        for (const auto& table : result.static_callback_record_tables)
+            if (table.source_kind == katana::analysis::CallbackRecordTableSource::PublishedHeaderRecords)
+                tables.push_back(table);
+        const bool positive = variant == 0u || variant == 1u || variant == 5u || variant == 7u || variant == 14u;
+        require(tables.size() == (positive ? (variant == 1u ? 2u : 3u) : 0u),
+            "Published header producer/consumer regression: " + std::to_string(variant) +
+            " contracts=" + std::to_string(tables.size()));
+        if (positive) {
+            require(tables.front().function_address == base+0x40u &&
+                tables.front().vector_address == 0x8c780008u &&
+                tables.back().resident_cell_address == base+0x6c0u &&
+                tables.back().resident_target_address == 0x8c9000a0u &&
+                tables.front().record_stride == 20u &&
+                tables.front().callback_displacement == (variant == 7u ? 16 : 12) &&
+                tables.front().header_table_pointer_displacement == (variant == 5u ? 8 : 4) &&
+                tables.front().callback_argument == 2u && tables.front().callback_sink_address == base+0xa0u,
+                "Published header contract lost source, selector, field or sink provenance");
+            require(find_function(result,0x8c900080u) == nullptr,
+                "A module header became primary executable evidence");
+        }
+    }
+}
+
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--published-header-records") {
+        published_header_record_regressions();
+        std::cout << "published-header-records: 15 focused regressions passed\n";
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--persistent-field-copies") {
+        persistent_field_copy_regressions();
+        std::cout << "persistent-field-copies: 16 focused regressions passed\n";
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--resident-callback-cells") {
+        resident_callback_cell_regressions();
+        std::cout << "resident-callback-cells: 12 focused regressions passed\n";
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--descriptor-base-arguments") {
+        descriptor_base_argument_regressions();
+        mixed_stack_static_callback_regressions();
+        persistent_pointer_identity_regressions();
+        std::cout << "descriptor-base-arguments: 13 focused regressions passed\n";
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--constant-indexed-field-callbacks") {
+        constant_indexed_field_callback_regressions();
+        std::cout << "constant-indexed-field-callbacks: 7 focused regressions passed\n";
+        return EXIT_SUCCESS;
+    }
+    if (argc != 1) return EXIT_FAILURE;
+    published_header_record_regressions();
+    resident_callback_cell_regressions();
+    persistent_field_copy_regressions();
+    constant_indexed_field_callback_regressions();
+    descriptor_base_argument_regressions();
+    mixed_stack_static_callback_regressions();
+    persistent_pointer_identity_regressions();
     {
         const auto bounded_image = code_image(
             {0x09u, 0x00u, // nop

@@ -4303,6 +4303,7 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         final_static_persistent_pointer_sinks;
     std::vector<StaticCallbackFieldSinkContract>
         final_static_callback_field_sinks;
+    std::vector<PersistentFieldCopyContract> final_static_persistent_field_copies;
     std::vector<StaticCallbackRecordTableContract>
         final_static_callback_record_tables;
     bool static_callback_contracts_materialized = false;
@@ -6220,7 +6221,8 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                     &final_static_persistent_pointer_sinks,
                     &final_static_callback_field_sinks,
                     &final_static_callback_record_tables,
-                    session_state.static_callback_inventory_session.get());
+                    session_state.static_callback_inventory_session.get(),
+                    &final_static_persistent_field_copies);
             static_callback_contracts_materialized = true;
             auto& callback_candidates =
                 static_callback_inventory.stored_code_addresses;
@@ -7312,6 +7314,8 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         std::move(final_static_persistent_pointer_sinks);
     analysis.static_callback_field_sinks =
         std::move(final_static_callback_field_sinks);
+    analysis.static_persistent_field_copies =
+        std::move(final_static_persistent_field_copies);
     analysis.static_callback_record_tables =
         std::move(final_static_callback_record_tables);
     analysis.static_callback_contracts_materialized =

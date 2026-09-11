@@ -182,6 +182,31 @@ int main() {
                 runtime_image.resolve_segment_address(0x89000010u, 2u) == 0x89000010u &&
                 runtime_image.address_aliases().size() == 1u,
             "Runtime-Adressalias wird nicht stabil auf seine Analysequelle normalisiert.");
+    require(runtime_image.resolve_segment_address(0x0C900010u, 2u) == 0x89000010u &&
+                runtime_image.resolve_segment_address(0xAC900010u, 2u) == 0x89000010u,
+            "Physische/P2-Callbackzeiger verloren den gebundenen Runtime-Alias.");
+    require(runtime_image.resolve_segment_address(0x0C90001Fu, 1u) == 0x8900001Fu &&
+                !runtime_image.resolve_segment_address(0x0C90001Fu, 2u) &&
+                !runtime_image.resolve_segment_address(0xAC900020u, 1u) &&
+                !runtime_image.resolve_segment_address(0x0C8FFFFFu, 1u) &&
+                !runtime_image.resolve_segment_address(0x0C900010u, 0u) &&
+                !runtime_image.resolve_segment_address(0xEC900010u, 2u),
+            "Physische Aliasnormalisierung umgeht Extent-/Breiten-/P4-Grenzen.");
+    for (const auto runtime_base : {0x0D200000u, 0x8D200000u, 0xAD200000u}) {
+        ExecutableImage relocated;
+        relocated.add_segment({"relocated-source", 0x88010000u, 0u, 0x10u,
+            SegmentKind::Mixed, {true, true, true}, std::vector<std::uint8_t>(0x10u, 0u)});
+        relocated.add_address_alias({0x88010000u, runtime_base, 0x10u});
+        const auto other_spelling = runtime_base == 0x0D200000u ? 0x8D200008u : 0x0D200008u;
+        require(!relocated.resolve_segment_address(other_spelling, 4u),
+                "Exact-Image erhaelt ungefragte SH-4-Aliasnormalisierung.");
+        relocated.set_address_model(ImageAddressModel::Sh4DirectMapped);
+        for (const auto spelling : {0x0D200008u, 0x8D200008u, 0xAD200008u})
+            require(relocated.resolve_segment_address(spelling, 4u) == 0x88010008u,
+                    "Gebundene Platzierung haengt von ihrer P0/P1/P2-Schreibweise ab.");
+        require(!relocated.resolve_segment_address(0x0D20000Fu, 2u),
+                "Relozierter Alias liest hinter seinen gebundenen Quellbereich.");
+    }
     require_throws<std::invalid_argument>(
         [&runtime_image] {
             runtime_image.add_address_alias({0x89000010u, 0x8CA00000u, 0x10u});

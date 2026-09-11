@@ -1,6 +1,8 @@
 #pragma once
 
 #include "katana/analysis/callback_table_source.hpp"
+#include "katana/analysis/persistent_field_copy.hpp"
+#include "katana/analysis/native_sdk_provider_analysis.hpp"
 
 #include "katana/analysis/hardware_audit.hpp"
 #include "katana/ir/ir.hpp"
@@ -12,6 +14,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -202,6 +205,8 @@ struct LatentAotExternalCallbackFieldSink final {
     std::uint8_t width = 0u;
     bool call = false;
     std::uint8_t receiver_argument_mask = 0u;
+    // Exact incoming descriptor argument; independent of the callback ABI.
+    std::uint8_t base_argument_mask = 0u;
 
     [[nodiscard]] bool operator==(
         const LatentAotExternalCallbackFieldSink&) const = default;
@@ -227,8 +232,10 @@ struct LatentAotExternalCallbackRecordTable final {
     katana::analysis::CallbackRecordTableSource source_kind =
         katana::analysis::CallbackRecordTableSource::HeaderCount;
     std::uint8_t table_argument = 0u;
-    // Canonical P1 runtime address for StaticVectorAddress; zero otherwise.
+    // Canonical P1 vector address or resident table base; zero for shape-only contracts.
     std::uint32_t vector_address = 0u;
+    std::uint32_t resident_cell_address = 0u;
+    std::uint32_t resident_target_address = 0u;
 
     [[nodiscard]] bool operator==(
         const LatentAotExternalCallbackRecordTable&) const = default;
@@ -248,6 +255,25 @@ struct LatentAotExternalLiteralTransferCandidate final {
 
     [[nodiscard]] bool operator==(
         const LatentAotExternalLiteralTransferCandidate&) const = default;
+};
+
+enum class LatentAotSourceTransform : std::uint8_t;
+
+// Source-derived possible file placement, NOT a proven loader effect. The
+// caller must revalidate its code/literal/file derivation against the current
+// primary image, just as for external callback consumer contracts. No oracle
+// entry offsets belong here. The source contract identity binds that derivation.
+// Only RuntimeOnly discovery may combine this with independently typed resident
+// callback cells to compile conditional coverage. It proves neither reachability,
+// selector completeness, ABI, successful loading nor actual runtime placement.
+struct LatentAotConditionalModulePlacement final {
+    LatentAotSourceTransform transform{};
+    std::string source_byte_identity;
+    std::uint32_t source_byte_size = 0u;
+    std::string decoded_byte_identity;
+    std::uint32_t decoded_byte_size = 0u;
+    std::uint32_t possible_runtime_base = 0u;
+    std::string source_contract_identity;
 };
 
 struct LatentAotDiscoveryOptions {
@@ -343,6 +369,10 @@ struct LatentAotDiscoveryOptions {
     // Sorted, unique field-load/call shapes from identity-bound primary code.
     std::span<const LatentAotExternalCallbackFieldSink>
         external_callback_field_sinks;
+    // Exact primary load/store lineage. A copied word is only a candidate;
+    // local descriptor bytes and executable shape must be proven separately.
+    std::span<const katana::analysis::PersistentFieldCopyContract>
+        external_persistent_field_copies;
     std::span<const LatentAotExternalCallbackRecordTable>
         external_callback_record_tables;
     // Sorted, unique primary-image literal transfers. Each target is projected
@@ -350,6 +380,16 @@ struct LatentAotDiscoveryOptions {
     // guarded RuntimeOnly entry candidate.
     std::span<const LatentAotExternalLiteralTransferCandidate>
         external_literal_transfer_candidates;
+    // Compile-only coverage input. Strict ignores it. Actual execution still
+    // requires the active module identity/generation, sealed block and existing
+    // ABI/continuation guards. This never installs a CFA or runtime alias.
+    std::span<const LatentAotConditionalModulePlacement>
+        conditional_module_placements;
+    // Current source-call derivations; the disc catalog binds exact unique
+    // names, encoded/decoded identities and nonoverlapping PRS extents during
+    // its existing read/decode pass. No additional disc scan is performed.
+    std::span<const katana::analysis::NativeConditionalFilePlacement>
+        conditional_file_placements;
 };
 
 // Permanent, disc-independent diagnostic for one already decoded latent
@@ -456,7 +496,25 @@ struct LatentAotModuleAuditResult {
     // never seed CFA, closure, AOT, Strict, or runtime execution.
     std::vector<LatentAotReturnObjectCallbackCandidate>
         return_object_callback_candidates;
+    // Separate from declared/prefix roots and loader-tail authority.
+    std::vector<std::uint32_t> conditional_callback_entry_offsets;
+    std::optional<std::uint32_t> conditional_callback_runtime_base;
+    std::string conditional_callback_contract_identity;
 };
+
+enum class LatentAotSourceTransform : std::uint8_t;
+
+// Diagnostic counterpart of unhinted disc discovery. Infer roots from the
+// production transformed-module header rule, otherwise probe offset zero.
+// It accepts no oracle roots and retains all ordinary admission gates and
+// the encoded source binding. Rejection is not executable evidence.
+[[nodiscard]] LatentAotModuleAuditResult audit_latent_aot_module_discovery(
+    std::span<const std::uint8_t> source_bytes,
+    std::uint32_t source_address,
+    LatentAotSourceTransform transform,
+    std::optional<std::uint32_t> proven_runtime_base = std::nullopt,
+    const LatentAotDiscoveryOptions& options = {},
+    bool strict_completeness = false);
 
 // Audits retain their historical RuntimeOnly default. Explicit strict
 // completeness exercises the production Strict path without promoting candidates.

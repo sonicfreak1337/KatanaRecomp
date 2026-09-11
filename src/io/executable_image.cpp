@@ -645,6 +645,21 @@ ExecutableImage::resolve_segment_address(const std::uint32_t address,
     if (address_model_ != ImageAddressModel::Sh4DirectMapped || address >= 0xE0000000u)
         return std::nullopt;
     const auto physical = address & 0x1FFFFFFFu;
+    // A bound runtime placement has the same SH-4 direct-mapped spellings
+    // as a resident segment. Resolve those spellings through this exact
+    // alias; the unique-layout checks reject physical owner collisions.
+    // Do not recursively normalize the source or infer another placement.
+    for (const auto& alias : address_aliases_) {
+        if (alias.runtime_start >= kSh4DirectAddressLimit) continue;
+        const auto runtime_physical = alias.runtime_start & 0x1FFFFFFFu;
+        if (physical < runtime_physical) continue;
+        const auto offset = static_cast<std::uint64_t>(physical) - runtime_physical;
+        if (offset >= alias.size || width > alias.size - offset) continue;
+        const auto source = static_cast<std::uint64_t>(alias.source_start) + offset;
+        if (source > std::numeric_limits<std::uint32_t>::max()) continue;
+        const auto candidate = static_cast<std::uint32_t>(source);
+        if (find_segment(candidate, width) != nullptr) return candidate;
+    }
     for (const auto& segment : segments_) {
         if (segment.virtual_address >= 0xE0000000u) continue;
         const auto segment_physical = segment.virtual_address & 0x1FFFFFFFu;
